@@ -7,5 +7,5 @@ test_echo:
 test_hello:
 	curl -X POST -d 'gopher' http://localhost:8080/hello -w '\n'
 
-format:
+fmt:
 	gofmt -w .

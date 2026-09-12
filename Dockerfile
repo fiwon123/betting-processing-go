@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     -o /out/api \
     ./cmd/api
 
-# Tests
+# Test
 FROM build-stage AS run-test-stage
 
 RUN go test -v ./...
