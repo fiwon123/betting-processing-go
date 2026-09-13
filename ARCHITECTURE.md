@@ -9,6 +9,20 @@ Além de ser descrito como linguagem de baixo nível e de alta performance.
 Checar mais no repositório a seguir:
 https://github.com/jackc/pgx
 
+## Mapeamento do Money
+
+Money é representado como um valor inteiro usando a menor unidade, no caso do BRL o centavos.
+
+
+Na API foi utilizado o tipo int64. E no banco de dados Postgres foi utilizado o tipo BIGINT.
+
+Por exemplo:
+- BRL **10.50** seria representado como **1050** em centavos.
+- BRL **5.00** seria representado como **500** em centavos.
+
+Os tipos flutuantes como float não são utilizados em valores monetários.
+A variável **currency** é utilizado para identificação da moeda com base na **ISO 4217** como **BRL**.
+
 
 ## Dockerfile
 

@@ -17,7 +17,7 @@ CREATE TABLE wager_transactions (
     game_id TEXT,
 
     transaction_type VARCHAR(20) NOT NULL,
-    amount_minor BIGINT NOT NULL,
+    amount BIGINT NOT NULL,
     currency VARCHAR(3) NOT NULL,
 
     external_reference TEXT,
@@ -58,7 +58,7 @@ CREATE TABLE wager_transactions (
         ),
 
     CONSTRAINT wager_transactions_amount_chk
-        CHECK (amount_minor >= 0),
+        CHECK (amount >= 0),
 
     CONSTRAINT wager_transactions_currency_chk
         CHECK (

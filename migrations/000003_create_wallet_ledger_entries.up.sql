@@ -8,11 +8,11 @@ CREATE TABLE wallet_ledger_entries (
         REFERENCES wager_transactions(id),
 
     direction VARCHAR(10) NOT NULL,
-    amount_minor BIGINT NOT NULL,
+    amount BIGINT NOT NULL,
     currency VARCHAR(3) NOT NULL,
 
-    balance_before_minor BIGINT NOT NULL,
-    balance_after_minor BIGINT NOT NULL,
+    balance_before BIGINT NOT NULL,
+    balance_after BIGINT NOT NULL,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -20,7 +20,7 @@ CREATE TABLE wallet_ledger_entries (
         CHECK (direction IN ('DEBIT', 'CREDIT')),
 
     CONSTRAINT wallet_ledger_amount_chk
-        CHECK (amount_minor > 0),
+        CHECK (amount > 0),
 
     CONSTRAINT wallet_ledger_currency_chk
         CHECK (
@@ -29,23 +29,23 @@ CREATE TABLE wallet_ledger_entries (
         ),
 
     CONSTRAINT wallet_ledger_balance_before_chk
-        CHECK (balance_before_minor >= 0),
+        CHECK (balance_before >= 0),
 
     CONSTRAINT wallet_ledger_balance_after_chk
-        CHECK (balance_after_minor >= 0),
+        CHECK (balance_after >= 0),
 
     CONSTRAINT wallet_ledger_math_chk
         CHECK (
             (
                 direction = 'CREDIT'
-                AND balance_after_minor =
-                    balance_before_minor + amount_minor
+                AND balance_after =
+                    balance_before + amount
             )
             OR
             (
                 direction = 'DEBIT'
-                AND balance_after_minor =
-                    balance_before_minor - amount_minor
+                AND balance_after =
+                    balance_before - amount
             )
         ),
 
