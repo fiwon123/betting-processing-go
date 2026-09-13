@@ -11,7 +11,7 @@ services:
       API_DB_PASSWORD: ${API_DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra/postgres-init:/docker-entrypoint-initdb.d:ro
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         [
@@ -21,6 +21,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  migrate:
+    image: migrate/migrate:4
+    environment:
+      API_DB: ${API_DB}
+      API_DB_USER: ${API_DB_USER}
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+    volumes:
+      - ./db/migrations:/migrations:ro
+      - ./scripts/run_migrate.sh:/scripts/run_migrate.sh:ro
+    entrypoint: ["/scripts/run_migrate.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.3
