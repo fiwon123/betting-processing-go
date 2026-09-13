@@ -1,7 +1,7 @@
 include .env
 export
 
-.PHONY: run fmt
+.PHONY: run fmt test test-race test-full
 
 run:
 	go run ./cmd/api
@@ -9,6 +9,14 @@ run:
 fmt:
 	gofmt -w .
 
+test:
+	go test ./...
+
+test-race:
+	go test -race ./...
+
+test-full:
+	go test -race -cover ./...
 
 test_health_live:
 	curl -i http://localhost:8080/health/live
