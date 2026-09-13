@@ -40,7 +40,7 @@ func NewConfig() (Config, error) {
 	}
 
 	return Config{
-		Environment: getEnv("ENVIRONMENT", "development"),
+		Environment: getEnv("API_ENVIRONMENT", "development"),
 		Database: DatabaseConfig{
 			URL:             databaseURL,
 			MinConns:        int32(getInt("API_DB_MIN_CONNS", 2)),
@@ -59,7 +59,7 @@ func NewConfig() (Config, error) {
 }
 
 func buildDatabaseURL() (string, error) {
-	host := getEnv("ENVIRONMENT", "production")
+	host := getEnv("API_DB_HOST", "localhost")
 	port := getEnv("API_DB_PORT", "5432")
 	user := os.Getenv("API_DB_USER")
 	password := os.Getenv("API_DB_PASSWORD")
@@ -67,15 +67,15 @@ func buildDatabaseURL() (string, error) {
 	sslMode := getEnv("API_DB_SSLMODE", "disable")
 
 	if user == "" {
-		return "", fmt.Errorf("DB_USER is required")
+		return "", fmt.Errorf("API_DB_USER is required")
 	}
 
 	if password == "" {
-		return "", fmt.Errorf("DB_PASSWORD is required")
+		return "", fmt.Errorf("API_DB_PASSWORD is required")
 	}
 
 	if name == "" {
-		return "", fmt.Errorf("DB_NAME is required")
+		return "", fmt.Errorf("API_DB is required")
 	}
 
 	databaseURL := url.URL{

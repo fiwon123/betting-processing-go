@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewLogger(lc fx.Lifecycle, config *cfg.Config) (*zap.Logger, error) {
+func NewLogger(lc fx.Lifecycle, config cfg.Config) (*zap.Logger, error) {
 	var (
 		log *zap.Logger
 		err error

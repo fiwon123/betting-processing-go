@@ -24,7 +24,7 @@ RUN go test -v ./...
 # Deploy
 FROM gcr.io/distroless/base-debian12 AS build-release-stage
 
-COPY --from= run-test-stage /out/api /api
+COPY --from=run-test-stage /out/api /api
 
 EXPOSE 8080
 

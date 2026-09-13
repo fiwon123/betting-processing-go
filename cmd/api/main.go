@@ -10,6 +10,7 @@ import (
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
 	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/infra/logger"
+	"github.com/fiwon123/betting-processing-go/internal/infra/sqs"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
@@ -74,6 +75,14 @@ func AsRoute(f any) any {
 	)
 }
 
+func NewQueueURL(c cfg.Config) string {
+	return c.SQS.QueueURL
+}
+
+func NewDatabaseConfig(c cfg.Config) cfg.DatabaseConfig {
+	return c.Database
+}
+
 func main() {
 	fx.New(
 		fx.WithLogger(func(log *zap.Logger) fxevent.Logger {
@@ -85,8 +94,28 @@ func main() {
 				NewRouter,
 				fx.ParamTags(`group:"routes"`),
 			),
-			AsRoute(handlers.NewHealthHandler),
+			fx.Annotate(
+				sqs.New,
+				fx.As(new(handlers.SQSClient)),
+			),
+			fx.Annotate(
+				NewQueueURL,
+				fx.ResultTags(`name:"sqs-queue-url"`),
+			),
+			fx.Annotate(
+				handlers.NewHealthHandler,
+				fx.As(new(Route)),
+				fx.ResultTags(`group:"routes"`),
+				fx.ParamTags(
+					"",
+					"",
+					`name:"sqs-queue-url"`,
+				),
+			),
+
+			AsRoute(handlers.NewWalletHandler),
 			cfg.NewConfig,
+			NewDatabaseConfig,
 			db.NewPool,
 			logger.NewLogger,
 		),

@@ -6,6 +6,7 @@ services:
       POSTGRES_USER: ${KC_DB_USER}
       POSTGRES_PASSWORD: ${KC_DB_PASSWORD}
 
+      API_ENVIRONMENT: ${API_ENVIRONMENT}
       API_DB: ${API_DB}
       API_DB_USER: ${API_DB_USER}
       API_DB_PASSWORD: ${API_DB_PASSWORD}
@@ -65,10 +66,10 @@ services:
     environment:
       API_DB_HOST: ${API_DB_HOST}
       API_DB_PORT: "${API_DB_PORT}"
-      DB_NAME: ${API_DB}
-      DB_USER: ${API_DB_USER}
-      DB_PASSWORD: ${API_DB_PASSWORD}
-      DB_SSLMODE: disable
+      API_DB: ${API_DB}
+      API_DB_USER: ${API_DB_USER}
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+      API_DB_SSLMODE: ${API_DB_SSLMODE}
 
       DB_MIN_CONNS: ${API_DB_MIN_CONNS}
       DB_MAX_CONNS: ${API_DB_MAX_CONNS}
