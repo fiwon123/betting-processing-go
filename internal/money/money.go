@@ -3,17 +3,17 @@ package money
 import "math"
 
 type Money struct {
-	amountMinor int64
+	amount int64
 	currency    Currency
 }
 
-func NewMoney(amountMinor int64, currency Currency) (Money, error) {
+func NewMoney(amount int64, currency Currency) (Money, error) {
 	if !currency.Valid() {
 		return Money{}, ErrUnsupportedCurrency
 	}
 
 	return Money{
-		amountMinor: amountMinor,
+		amount: amount,
 		currency:    currency,
 	}, nil
 }
@@ -22,8 +22,8 @@ func ZeroMoney(currency Currency) (Money, error) {
 	return NewMoney(0, currency)
 }
 
-func (m Money) AmountMinor() int64 {
-	return m.amountMinor
+func (m Money) Amount() int64 {
+	return m.amount
 }
 
 func (m Money) Currency() Currency {
@@ -35,18 +35,18 @@ func (m Money) Add(other Money) (Money, error) {
 		return Money{}, err
 	}
 
-	if other.amountMinor > 0 &&
-		m.amountMinor > math.MaxInt64-other.amountMinor {
+	if other.amount > 0 &&
+		m.amount > math.MaxInt64-other.amount {
 		return Money{}, ErrOverflow
 	}
 
-	if other.amountMinor < 0 &&
-		m.amountMinor < math.MinInt64-other.amountMinor {
+	if other.amount < 0 &&
+		m.amount < math.MinInt64-other.amount {
 		return Money{}, ErrOverflow
 	}
 
 	return Money{
-		amountMinor: m.amountMinor + other.amountMinor,
+		amount: m.amount + other.amount,
 		currency:    m.currency,
 	}, nil
 }
@@ -56,23 +56,23 @@ func (m Money) Subtract(other Money) (Money, error) {
 		return Money{}, err
 	}
 
-	if other.amountMinor == math.MinInt64 {
+	if other.amount == math.MinInt64 {
 		return Money{}, ErrOverflow
 	}
 
 	return m.Add(Money{
-		amountMinor: -other.amountMinor,
+		amount: -other.amount,
 		currency:    other.currency,
 	})
 }
 
 func (m Money) Negate() (Money, error) {
-	if m.amountMinor == math.MinInt64 {
+	if m.amount == math.MinInt64 {
 		return Money{}, ErrOverflow
 	}
 
 	return Money{
-		amountMinor: -m.amountMinor,
+		amount: -m.amount,
 		currency:    m.currency,
 	}, nil
 }
@@ -83,9 +83,9 @@ func (m Money) Compare(other Money) (int, error) {
 	}
 
 	switch {
-	case m.amountMinor < other.amountMinor:
+	case m.amount < other.amount:
 		return -1, nil
-	case m.amountMinor > other.amountMinor:
+	case m.amount > other.amount:
 		return 1, nil
 	default:
 		return 0, nil
@@ -93,11 +93,11 @@ func (m Money) Compare(other Money) (int, error) {
 }
 
 func (m Money) IsNegative() bool {
-	return m.amountMinor < 0
+	return m.amount < 0
 }
 
 func (m Money) IsZero() bool {
-	return m.amountMinor == 0
+	return m.amount == 0
 }
 
 func (m Money) checkCurrency(other Money) error {
