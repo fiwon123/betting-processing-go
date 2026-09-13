@@ -10,6 +10,7 @@ import (
 )
 
 type Config struct {
+	Environment string
 	Database DatabaseConfig
 	AWS      AWSConfig
 	SQS      SQSConfig
@@ -39,6 +40,7 @@ func NewConfig() (Config, error) {
 	}
 
 	return Config{
+		Environment: getEnv("ENVIRONMENT", "development"),
 		Database: DatabaseConfig{
 			URL:             databaseURL,
 			MinConns:        int32(getInt("API_DB_MIN_CONNS", 2)),
@@ -57,7 +59,7 @@ func NewConfig() (Config, error) {
 }
 
 func buildDatabaseURL() (string, error) {
-	host := getEnv("API_DB_HOST", "localhost")
+	host := getEnv("ENVIRONMENT", "production")
 	port := getEnv("API_DB_PORT", "5432")
 	user := os.Getenv("API_DB_USER")
 	password := os.Getenv("API_DB_PASSWORD")
