@@ -64,8 +64,10 @@ services:
     ports:
       - "8080:8080"
     environment:
+      API_ENVIRONMENT: ${API_ENVIRONMENT}
+
       API_DB_HOST: ${API_DB_HOST}
-      API_DB_PORT: "${API_DB_PORT}"
+      API_DB_PORT: ${API_DB_PORT}
       API_DB: ${API_DB}
       API_DB_USER: ${API_DB_USER}
       API_DB_PASSWORD: ${API_DB_PASSWORD}
@@ -76,11 +78,14 @@ services:
       DB_MAX_CONN_LIFETIME: ${API_DB_MAX_CONN_LIFETIME}
       DB_MAX_CONN_IDLE_TIME: ${API_DB_MAX_CONN_IDLE_TIME}
 
-      AWS_REGION: ${MINISTACK_REGION}
+      AWS_REGION: ${AWS_REGION}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL}
-      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
+      SQS_QUEUE_NAME: ${SQS_QUEUE_NAME}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,13 +93,31 @@ services:
         condition: service_started
       ministack:
         condition: service_started
+      sqs-init:
+        condition: service_completed_successfully
 
   ministack:
     image: ministackorg/ministack:1.5.10
     ports:
       - "4566:4566"
     environment:
-      MINISTACK_REGION: ${MINISTACK_REGION}
+      AWS_REGION: ${AWS_REGION}
+
+  sqs-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/sqs-init"]
+    restart: "no"
+    environment:
+      AWS_REGION: ${AWS_REGION}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      SQS_QUEUE_NAME: ${SQS_QUEUE_NAME}
+    depends_on:
+      ministack:
+        condition: service_healthy
 
 volumes:
   postgres_data:

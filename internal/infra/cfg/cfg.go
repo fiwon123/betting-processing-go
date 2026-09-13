@@ -5,15 +5,14 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"strconv"
 	"time"
 )
 
 type Config struct {
 	Environment string
-	Database DatabaseConfig
-	AWS      AWSConfig
-	SQS      SQSConfig
+	Database    DatabaseConfig
+	AWS         AWSConfig
+	SQS         SQSConfig
 }
 
 type DatabaseConfig struct {
@@ -40,16 +39,16 @@ func NewConfig() (Config, error) {
 	}
 
 	return Config{
-		Environment: getEnv("API_ENVIRONMENT", "development"),
+		Environment: GetEnv("API_ENVIRONMENT", "development"),
 		Database: DatabaseConfig{
 			URL:             databaseURL,
-			MinConns:        int32(getInt("API_DB_MIN_CONNS", 2)),
-			MaxConns:        int32(getInt("API_DB_MAX_CONNS", 10)),
-			MaxConnLifetime: getDuration("API_DB_MAX_CONN_LIFETIME", 30*time.Minute),
-			MaxConnIdleTime: getDuration("API_DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
+			MinConns:        int32(GetInt("API_DB_MIN_CONNS", 2)),
+			MaxConns:        int32(GetInt("API_DB_MAX_CONNS", 10)),
+			MaxConnLifetime: GetDuration("API_DB_MAX_CONN_LIFETIME", 30*time.Minute),
+			MaxConnIdleTime: GetDuration("API_DB_MAX_CONN_IDLE_TIME", 5*time.Minute),
 		},
 		AWS: AWSConfig{
-			Region:   getEnv("AWS_REGION", "us-east-1"),
+			Region:   GetEnv("AWS_REGION", "us-east-1"),
 			Endpoint: os.Getenv("AWS_ENDPOINT_URL"),
 		},
 		SQS: SQSConfig{
@@ -59,12 +58,12 @@ func NewConfig() (Config, error) {
 }
 
 func buildDatabaseURL() (string, error) {
-	host := getEnv("API_DB_HOST", "localhost")
-	port := getEnv("API_DB_PORT", "5432")
+	host := GetEnv("API_DB_HOST", "localhost")
+	port := GetEnv("API_DB_PORT", "5432")
 	user := os.Getenv("API_DB_USER")
 	password := os.Getenv("API_DB_PASSWORD")
 	name := os.Getenv("API_DB")
-	sslMode := getEnv("API_DB_SSLMODE", "disable")
+	sslMode := GetEnv("API_DB_SSLMODE", "disable")
 
 	if user == "" {
 		return "", fmt.Errorf("API_DB_USER is required")
@@ -89,40 +88,4 @@ func buildDatabaseURL() (string, error) {
 	}
 
 	return databaseURL.String(), nil
-}
-
-func getEnv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-
-	return fallback
-}
-
-func getInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-
-	return parsed
-}
-
-func getDuration(key string, fallback time.Duration) time.Duration {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-
-	return parsed
 }

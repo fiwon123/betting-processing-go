@@ -39,7 +39,7 @@ func NewHealthHandler(
 		db:       db,
 		sqs:      sqsClient,
 		queueURL: queueURL,
-		log: log,
+		log:      log,
 	}
 }
 
