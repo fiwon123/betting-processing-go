@@ -26,14 +26,16 @@ services:
     image: migrate/migrate:4
     environment:
       API_DB: ${API_DB}
+      API_DB_HOST: ${API_DB_HOST}
+      API_DB_PORT: ${API_DB_PORT}
       API_DB_USER: ${API_DB_USER}
       API_DB_PASSWORD: ${API_DB_PASSWORD}
     volumes:
-      - ./db/migrations:/migrations:ro
-      - ./scripts/run_migrate.sh:/scripts/run_migrate.sh:ro
-    entrypoint: ["/scripts/run_migrate.sh"]
+      - ./migrations:/migrations:ro
+      - ./scripts/migrations/run-migrate.sh:/scripts/run-migrate.sh:ro
+    entrypoint: ["/scripts/run-migrate.sh"]
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
 
   keycloak:
@@ -87,7 +89,7 @@ services:
         condition: service_started
 
   ministack:
-    image: ministackorg/ministack:v1.5.10
+    image: ministackorg/ministack:1.5.10
     ports:
       - "4566:4566"
     environment:
