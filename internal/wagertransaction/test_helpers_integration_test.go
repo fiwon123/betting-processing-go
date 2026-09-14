@@ -4,12 +4,79 @@ package wagertransaction
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/money"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type testTxManager struct {
+	pool *pgxpool.Pool
+}
+
+type testDBTx struct {
+	tx interface {
+		Exec(ctx context.Context, sql string, args ...any) (interface{ RowsAffected() int64 }, error)
+		QueryRow(ctx context.Context, sql string, args ...any) interface{ Scan(dest ...any) error }
+		Commit(ctx context.Context) error
+		Rollback(ctx context.Context) error
+	}
+}
+
+func (t *testTxManager) Begin(ctx context.Context) (domain.DBTx, error) {
+	tx, err := t.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	return &testDBTxWrapper{tx: tx}, nil
+}
+
+type testDBTxWrapper struct {
+	tx pgx.Tx
+}
+
+func (t *testDBTxWrapper) Exec(ctx context.Context, sql string, args ...any) (domain.CommandTag, error) {
+	tag, err := t.tx.Exec(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgxCommandTagWrap{tag: tag}, nil
+}
+
+func (t *testDBTxWrapper) QueryRow(ctx context.Context, sql string, args ...any) domain.Row {
+	return pgxRowWrap{row: t.tx.QueryRow(ctx, sql, args...)}
+}
+
+func (t *testDBTxWrapper) Commit(ctx context.Context) error {
+	return t.tx.Commit(ctx)
+}
+
+func (t *testDBTxWrapper) Rollback(ctx context.Context) error {
+	return t.tx.Rollback(ctx)
+}
+
+type pgxCommandTagWrap struct {
+	tag interface{ RowsAffected() int64 }
+}
+
+func (t pgxCommandTagWrap) RowsAffected() int64 {
+	return t.tag.RowsAffected()
+}
+
+type pgxRowWrap struct {
+	row interface{ Scan(dest ...any) error }
+}
+
+func (r pgxRowWrap) Scan(dest ...any) error {
+	return r.row.Scan(dest...)
+}
+
+func newTestTxManager(pool *pgxpool.Pool) *testTxManager {
+	return &testTxManager{pool: pool}
+}
 
 type testRepo struct {
 	pool *pgxpool.Pool
@@ -338,7 +405,7 @@ type testWalletSvc struct {
 func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
 	var balance int64
 	var version int64
-	err := w.pool.QueryRow(ctx,
+	err := dbTx.QueryRow(ctx,
 		`SELECT balance, version FROM wallets WHERE id = $1 FOR UPDATE`, walletID,
 	).Scan(&balance, &version)
 	if err != nil {
@@ -348,7 +415,7 @@ func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID st
 		return money.Money{}, money.Money{}, 0, ErrInsufficientBalance
 	}
 	newBalance := balance - amount.Amount()
-	_, err = w.pool.Exec(ctx,
+	_, err = dbTx.Exec(ctx,
 		`UPDATE wallets SET balance = $1, version = version + 1 WHERE id = $2 AND version = $3`,
 		newBalance, walletID, version,
 	)
@@ -363,14 +430,14 @@ func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID st
 func (w *testWalletSvc) Credit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
 	var balance int64
 	var version int64
-	err := w.pool.QueryRow(ctx,
+	err := dbTx.QueryRow(ctx,
 		`SELECT balance, version FROM wallets WHERE id = $1 FOR UPDATE`, walletID,
 	).Scan(&balance, &version)
 	if err != nil {
 		return money.Money{}, money.Money{}, 0, err
 	}
 	newBalance := balance + amount.Amount()
-	_, err = w.pool.Exec(ctx,
+	_, err = dbTx.Exec(ctx,
 		`UPDATE wallets SET balance = $1, version = version + 1 WHERE id = $2 AND version = $3`,
 		newBalance, walletID, version,
 	)
@@ -380,6 +447,18 @@ func (w *testWalletSvc) Credit(ctx context.Context, dbTx domain.DBTx, walletID s
 	balBefore := mustMoney(balance, amount.Currency())
 	balAfter := mustMoney(newBalance, amount.Currency())
 	return balBefore, balAfter, version + 1, nil
+}
+
+func (w *testWalletSvc) GetBalance(ctx context.Context, walletID string) (money.Money, error) {
+	var balance int64
+	var currency string
+	err := w.pool.QueryRow(ctx,
+		`SELECT balance, currency FROM wallets WHERE id = $1`, walletID,
+	).Scan(&balance, &currency)
+	if err != nil {
+		return money.Money{}, err
+	}
+	return mustMoney(balance, money.Currency(currency)), nil
 }
 
 func newTestWalletSvc(pool *pgxpool.Pool) *testWalletSvc {

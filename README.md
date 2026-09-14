@@ -8,6 +8,7 @@ Sistema de processamento de transações de apostas (bets, wins, losses, refunds
 - Docker e Docker Compose v2+
 - migrate CLI (para migrations locais)
 - cURL (para testes de health)
+- jq (para testes manuais)
 
 ## Variáveis de Ambiente
 
@@ -55,7 +56,7 @@ O Keycloak é provisionado **automaticamente** ao executar `docker compose up --
 - Realm `betting`
 - Client `betting-api` (secret: `secret123`, Direct Access Grants enabled)
 - Usuários `provider1` (senha: `provider1`) e `provider2` (senha: `provider2`)
-- Atributo `provider_id` em cada usuário
+- Atributo `provider_id` em cada usuário (injetado diretamente no DB + mapper JWT)
 
 Para verificar se o provisionamento funcionou, acesse o Keycloak Admin Console: http://localhost:8081 (login: `admin` / `admin`).
 
@@ -105,150 +106,209 @@ go run ./cmd/worker
 docker compose up --build api worker
 ```
 
-## Exemplos de Chamadas
+## Teste Manual Passo a Passo
 
-### Criar carteira
+> **Importante:** O campo `playerId` deve ser um **UUID válido**. A coluna no banco de dados é do tipo `UUID`, portanto valores como `"player-1"` causarão erro. Use o formato `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+
+### 1. Subir o ambiente
 
 ```bash
-# Obter token
+docker compose up --build
+```
+
+Aguarde até ver `started` nos logs da API (~30-40 segundos):
+
+```bash
+docker compose logs -f api
+# Ctrl+C para parar de assistir (containers continuam rodando)
+```
+
+### 2. Verificar health checks
+
+```bash
+curl http://localhost:8080/health/live
+# {"status":"ok"}
+
+curl http://localhost:8080/health/ready
+# {"status":"ok"}
+```
+
+### 3. Obter token de autenticação
+
+O setup automático cria dois usuários de exemplo no Keycloak:
+
+| Usuário | Senha | provider_id |
+|---------|-------|-------------|
+| `provider1` | `provider1` | `provider1` |
+| `provider2` | `provider2` | `provider2` |
+
+```bash
 TOKEN=$(curl -s -X POST http://localhost:8081/realms/betting/protocol/openid-connect/token \
   -d "client_id=betting-api&client_secret=secret123&grant_type=password&username=provider1&password=provider1" \
   | jq -r '.access_token')
 
-# Criar carteira
-curl -X POST http://localhost:8080/wallets \
+# Verificar que o token contém o provider_id
+echo "$TOKEN" | cut -d'.' -f2 | base64 -d 2>/dev/null | jq '{provider_id, preferred_username}'
+```
+
+### 4. Criar carteira
+
+```bash
+WALLET=$(curl -s -X POST http://localhost:8080/wallets \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "playerId": "player-1",
-    "initialBalance": {"amount": "100.00", "currency": "BRL"}
-  }'
+    "playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "initialBalance": {"amount": "500.00", "currency": "BRL"}
+  }')
+
+echo $WALLET | jq '.'
+# Deve retornar balance: "500.00", version: 1
+
+WALLET_ID=$(echo $WALLET | jq -r '.id')
 ```
 
-### Processar BET
+### 5. Processar BET (apostar R$ 100,00)
 
 ```bash
-curl -X POST http://localhost:8080/wagering/transactions \
+curl -s -X POST http://localhost:8080/wagering/transactions \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: provider1:ext-bet-001" \
-  -d '{
-    "providerId": "provider1",
-    "externalTransactionId": "ext-bet-001",
-    "playerId": "player-1",
-    "walletId": "WALLET_ID",
-    "roundId": "round-1",
-    "gameId": "game-1",
-    "kind": "BET",
-    "money": {"amount": "50.00", "currency": "BRL"}
-  }'
+  -d "{
+    \"providerId\": \"provider1\",
+    \"externalTransactionId\": \"ext-bet-001\",
+    \"playerId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",
+    \"walletId\": \"$WALLET_ID\",
+    \"roundId\": \"round-1\",
+    \"gameId\": \"game-1\",
+    \"kind\": \"BET\",
+    \"money\": {\"amount\": \"100.00\", \"currency\": \"BRL\"}
+  }" | jq '{status, idempotentReplay}'
+# {"status":"PROCESSED","idempotentReplay":false}
 ```
 
-### Processar WIN
+### 6. Processar WIN (ganhar R$ 50,00)
 
 ```bash
-curl -X POST http://localhost:8080/wagering/transactions \
+curl -s -X POST http://localhost:8080/wagering/transactions \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: provider1:ext-win-001" \
-  -d '{
-    "providerId": "provider1",
-    "externalTransactionId": "ext-win-001",
-    "playerId": "player-1",
-    "walletId": "WALLET_ID",
-    "roundId": "round-1",
-    "gameId": "game-1",
-    "kind": "WIN",
-    "money": {"amount": "30.00", "currency": "BRL"}
-  }'
+  -d "{
+    \"providerId\": \"provider1\",
+    \"externalTransactionId\": \"ext-win-001\",
+    \"playerId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",
+    \"walletId\": \"$WALLET_ID\",
+    \"roundId\": \"round-1\",
+    \"gameId\": \"game-1\",
+    \"kind\": \"WIN\",
+    \"money\": {\"amount\": \"50.00\", \"currency\": \"BRL\"}
+  }" | jq '{status, idempotentReplay}'
+# {"status":"PROCESSED","idempotentReplay":false}
 ```
 
-### Processar REFUND
+### 7. Verificar saldo (500 - 100 + 50 = 450)
 
 ```bash
-curl -X POST http://localhost:8080/wagering/transactions \
+curl -s http://localhost:8080/wallets/$WALLET_ID \
+  -H "Authorization: Bearer $TOKEN" | jq '{balance: .balance, version: .version}'
+# {"balance":{"amount":"450.00","currency":"BRL"},"version":3}
+```
+
+### 8. Verificar ledger (histórico de movimentações)
+
+```bash
+curl -s "http://localhost:8080/wallets/$WALLET_ID/ledger?limit=10" \
+  -H "Authorization: Bearer $TOKEN" | jq '.entries[] | {direction, amount: .amount.amount}'
+# CREDIT  500.00  (abertura)
+# DEBIT   100.00  (BET)
+# CREDIT   50.00  (WIN)
+```
+
+### 9. Testar idempotência (reenviar o mesmo BET)
+
+```bash
+curl -s -X POST http://localhost:8080/wagering/transactions \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: provider1:ext-refund-001" \
-  -d '{
-    "providerId": "provider1",
-    "externalTransactionId": "ext-refund-001",
-    "playerId": "player-1",
-    "walletId": "WALLET_ID",
-    "roundId": "round-1",
-    "gameId": "game-1",
-    "kind": "REFUND",
-    "money": {"amount": "50.00", "currency": "BRL"},
-    "referenceExternalTransactionId": "ext-bet-001"
-  }'
+  -H "Idempotency-Key: provider1:ext-bet-001" \
+  -d "{
+    \"providerId\": \"provider1\",
+    \"externalTransactionId\": \"ext-bet-001\",
+    \"playerId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",
+    \"walletId\": \"$WALLET_ID\",
+    \"roundId\": \"round-1\",
+    \"gameId\": \"game-1\",
+    \"kind\": \"BET\",
+    \"money\": {\"amount\": \"100.00\", \"currency\": \"BRL\"}
+  }" | jq '{idempotentReplay, status}'
+# {"idempotentReplay":true,"status":"PROCESSED"}
+# Saldo NÃO muda — a transação não é processada novamente
 ```
 
-### Consultar carteira
+### 10. Testar saldo insuficiente (BET de R$ 999)
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/wallets/WALLET_ID
+curl -s -X POST http://localhost:8080/wagering/transactions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: provider1:ext-bet-big" \
+  -d "{
+    \"providerId\": \"provider1\",
+    \"externalTransactionId\": \"ext-bet-big\",
+    \"playerId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",
+    \"walletId\": \"$WALLET_ID\",
+    \"roundId\": \"round-2\",
+    \"gameId\": \"game-2\",
+    \"kind\": \"BET\",
+    \"money\": {\"amount\": \"999.00\", \"currency\": \"BRL\"}
+  }" | jq '.'
+# {"status":"REJECTED"} com saldo insuficiente
 ```
 
-### Consultar ledger
+### 11. Testar isolamento de provedor
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/wallets/WALLET_ID/ledger
+# Obter token do provider2
+TOKEN2=$(curl -s -X POST http://localhost:8081/realms/betting/protocol/openid-connect/token \
+  -d "client_id=betting-api&client_secret=secret123&grant_type=password&username=provider2&password=provider2" \
+  | jq -r '.access_token')
+
+# Tentar ler carteira do provider1 — deve retornar 403
+curl -s http://localhost:8080/wallets/$WALLET_ID \
+  -H "Authorization: Bearer $TOKEN2" | jq '.'
+# {"error":"forbidden"}
 ```
 
-### Reconciliação
+### 12. Reconciliação
 
 ```bash
-curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/wallets/WALLET_ID/reconciliation
+curl -s -X POST http://localhost:8080/wallets/$WALLET_ID/reconciliation \
+  -H "Authorization: Bearer $TOKEN" | jq '.'
+# {"consistent":true, ...}
 ```
 
-### Swagger / OpenAPI
+### 13. Métricas
 
-A documentação interativa da API está disponível em modo development:
+```bash
+curl -s http://localhost:8080/metrics | grep "wager_transactions_total"
+```
 
-- **Swagger UI**: http://localhost:8080/docs/
-- **Swagger JSON**: http://localhost:8080/docs/specs
+### 14. Swagger UI
+
+Abra no navegador: **http://localhost:8080/docs/**
 
 Para testar endpoints protegidos no Swagger:
-1. Obtenha um token JWT (veja "Obter token" acima)
+1. Obtenha o token JWT (passo 3)
 2. Clique no botão "Authorize" no Swagger UI
 3. Cole o token no campo `Value` (formato: `Bearer <token>`)
 
-### Health checks
+### 15. Parar o ambiente
 
 ```bash
-curl http://localhost:8080/health/live
-curl http://localhost:8080/health/ready
+docker compose down -v
 ```
-
-### Métricas
-
-```bash
-curl http://localhost:8080/metrics
-```
-
-As métricas Prometheus estão expostas em `http://localhost:8080/metrics`. Para configurar o Prometheus, adicione o endpoint no `prometheus.yml`:
-
-```yaml
-scrape_configs:
-  - job_name: 'betting-api'
-    static_configs:
-      - targets: ['localhost:8080']
-    metrics_path: '/metrics'
-```
-
-Métricas disponíveis:
-
-| Métrica | Tipo | Descrição |
-|---------|------|-----------|
-| `wager_transactions_total` | CounterVec | Total de transações por status |
-| `wager_transactions_duplicate_total` | Counter | Total de transações duplicadas |
-| `wager_transactions_retry_total` | Counter | Total de retries de referência |
-| `wager_transactions_dlq_total` | Counter | Total de eventos para DLQ |
-| `wager_concurrency_conflict_total` | Counter | Total de conflitos de lock |
-| `wager_outbox_pending_count` | Gauge | Eventos outbox pendentes |
-| `wager_outbox_publish_latency_seconds` | Histogram | Latência de publicação |
-| `wager_processing_duration_seconds` | Histogram | Duração de processamento |
-| `wager_reconciliation_divergence_total` | Counter | Divergências de reconciliação |
 
 ## Comandos de Teste
 
@@ -300,7 +360,7 @@ Os testes de integração requerem um banco de dados PostgreSQL real:
 
 ```bash
 # 1. Subir banco de teste
-docker compose -f docker-compose.test.yml up -d postgres migrate
+docker compose --env-file .env.test -f docker-compose.test.yml up -d postgres migrate
 
 # 2. Exportar variável de ambiente
 export TEST_DATABASE_URL="postgresql://api_test:api_test@localhost:5433/api_test?sslmode=disable"
@@ -311,26 +371,27 @@ go test -v -race -count=1 -tags=integration -timeout=300s ./...
 
 ### Testes E2E
 
-Os testes E2E requerem todos os serviços rodando:
+Os testes E2E requerem todos os serviços rodando. O Makefile usa `.env.test` para isolar os bancos de dados de teste:
+
+```bash
+# Via Makefile (recomendado)
+make test_e2e
+```
+
+Ou manualmente:
 
 ```bash
 # 1. Subir ambiente completo de teste
-docker compose -f docker-compose.test.yml up --build -d
+docker compose --env-file .env.test -f docker-compose.test.yml up --build -d
 
 # 2. Aguardar serviços ficarem prontos
-docker compose -f docker-compose.test.yml ps
+docker compose --env-file .env.test -f docker-compose.test.yml ps
 
 # 3. Executar testes E2E
 go test -v -race -count=1 -tags=e2e -timeout=300s ./internal/e2e/...
 
 # 4. Derrubar ambiente
-docker compose -f docker-compose.test.yml down -v
-```
-
-Ou usar o Makefile:
-
-```bash
-make test_e2e
+docker compose --env-file .env.test -f docker-compose.test.yml down -v
 ```
 
 ### Testes de múltiplas instâncias
@@ -369,6 +430,8 @@ betting-processing-go/
 ├── scripts/                  # Scripts de setup
 ├── docker-compose.yaml       # Ambiente de desenvolvimento
 ├── docker-compose.test.yml   # Ambiente de teste
+├── .env.example              # Variáveis de ambiente (dev)
+├── .env.test                 # Variáveis de ambiente (teste)
 ├── Makefile                  # Comandos úteis
 ├── ARCHITECTURE.md           # Documentação da arquitetura
 └── README.md                 # Este arquivo

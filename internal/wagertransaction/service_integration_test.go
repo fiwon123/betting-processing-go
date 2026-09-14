@@ -1,6 +1,6 @@
 //go:build integration
 
-package wagertransaction_test
+package wagertransaction
 
 import (
 	"context"
@@ -10,9 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/money"
-	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,7 +22,12 @@ func mustPool(t *testing.T) *pgxpool.Pool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	cfg.MaxConns = 20
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -32,31 +35,33 @@ func mustPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func seedWallet(t *testing.T, pool *pgxpool.Pool, walletID string, balance int64) {
+func seedWallet(t *testing.T, pool *pgxpool.Pool, walletID, playerID, providerID string, balance int64) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(),
-		`UPDATE wallets SET balance = $1, version = version + 1 WHERE id = $2`, balance, walletID,
+		`INSERT INTO wallets (id, player_id, provider_id, currency, balance, version, created_at, updated_at)
+		 VALUES ($1, $2, $3, 'BRL', $4, 1, now(), now())
+		 ON CONFLICT (id) DO UPDATE SET balance = EXCLUDED.balance, version = wallets.version + 1, updated_at = now()`, walletID, playerID, providerID, balance,
 	)
 	if err != nil {
 		t.Fatalf("seed wallet: %v", err)
 	}
 }
 
-func createTestService(t *testing.T, pool *pgxpool.Pool) *wagertransaction.Service {
+func createTestService(t *testing.T, pool *pgxpool.Pool) *Service {
 	t.Helper()
 	repo := newTestRepo(pool)
 	walletSvc := newTestWalletSvc(pool)
 	inboxRepo := newTestInboxRepo(pool)
 	outboxRepo := newTestOutboxRepo(pool)
-	txManager := db.NewTxManager(pool)
-	return wagertransaction.NewService(repo, inboxRepo, outboxRepo, walletSvc, txManager, nil)
+	txManager := newTestTxManager(pool)
+	return NewService(repo, inboxRepo, outboxRepo, walletSvc, txManager, nil)
 }
 
 func TestConcurrency_DoubleDebit(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000001"
 	playerID := "00000000-0000-0000-0000-000000000010"
-	seedWallet(t, pool, walletID, 10000)
+	seedWallet(t, pool, walletID, playerID, "test-double-debit", 10000)
 
 	svc := createTestService(t, pool)
 
@@ -70,13 +75,13 @@ func TestConcurrency_DoubleDebit(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			req := wagertransaction.Request{
-				ProviderID:            fmt.Sprintf("prov-%d", idx),
+			req := Request{
+				ProviderID:            "test-double-debit",
 				ExternalTransactionID: fmt.Sprintf("ext-%d", idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
-				Money: wagertransaction.MoneyDTO{
+				Money: MoneyDTO{
 					Amount:   "10.00",
 					Currency: "BRL",
 				},
@@ -122,17 +127,17 @@ func TestConcurrency_IdempotentReplay(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000002"
 	playerID := "00000000-0000-0000-0000-000000000020"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-idempotent", 100000)
 
 	svc := createTestService(t, pool)
 
-	req := wagertransaction.Request{
+	req := Request{
 		ProviderID:            "prov-idempotent",
 		ExternalTransactionID: "ext-idempotent",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money: wagertransaction.MoneyDTO{
+		Money: MoneyDTO{
 			Amount:   "5.00",
 			Currency: "BRL",
 		},
@@ -141,7 +146,7 @@ func TestConcurrency_IdempotentReplay(t *testing.T) {
 
 	const goroutines = 50
 	var wg sync.WaitGroup
-	results := make([]*wagertransaction.ProcessResult, goroutines)
+	results := make([]*ProcessResult, goroutines)
 
 	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
@@ -194,7 +199,7 @@ func TestConcurrency_TwoBetsOn100Balance(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000004"
 	playerID := "00000000-0000-0000-0000-000000000040"
-	seedWallet(t, pool, walletID, 10000)
+	seedWallet(t, pool, walletID, playerID, "test-two-bets", 10000)
 
 	svc := createTestService(t, pool)
 
@@ -207,13 +212,13 @@ func TestConcurrency_TwoBetsOn100Balance(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			req := wagertransaction.Request{
-				ProviderID:            fmt.Sprintf("prov-80-%d", idx),
+			req := Request{
+				ProviderID:            "test-two-bets",
 				ExternalTransactionID: fmt.Sprintf("ext-80-%d", idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
-				Money: wagertransaction.MoneyDTO{
+				Money: MoneyDTO{
 					Amount:   "80.00",
 					Currency: "BRL",
 				},
@@ -275,7 +280,7 @@ func TestConcurrency_OptimisticLocking(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000003"
 	playerID := "00000000-0000-0000-0000-000000000030"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "test-lock", 100000)
 
 	svc := createTestService(t, pool)
 
@@ -287,13 +292,13 @@ func TestConcurrency_OptimisticLocking(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			req := wagertransaction.Request{
-				ProviderID:            fmt.Sprintf("prov-lock-%d", idx),
+			req := Request{
+				ProviderID:            "test-lock",
 				ExternalTransactionID: fmt.Sprintf("ext-lock-%d", idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
-				Money: wagertransaction.MoneyDTO{
+				Money: MoneyDTO{
 					Amount:   "1.00",
 					Currency: "BRL",
 				},
@@ -332,20 +337,20 @@ func TestDoubleReversal_Rejected(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000010"
 	playerID := "00000000-0000-0000-0000-000000000011"
 	providerID := "prov-double-reversal"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-double-reversal", 100000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
 	// Step 1: Process a BET
-	betReq := wagertransaction.Request{
+	betReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-100",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-1",
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "50.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "50.00", Currency: "BRL"},
 	}
 	betResult, err := svc.ProcessTransaction(ctx, betReq, "", "")
 	if err != nil {
@@ -354,14 +359,14 @@ func TestDoubleReversal_Rejected(t *testing.T) {
 	t.Logf("BET processed: %s", betResult.TransactionID)
 
 	// Step 2: REFUND the BET
-	refundReq := wagertransaction.Request{
+	refundReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "refund-100",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-1",
 		Kind:                  "REFUND",
-		Money:                 wagertransaction.MoneyDTO{Amount: "50.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "50.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-100",
 	}
 	refundResult, err := svc.ProcessTransaction(ctx, refundReq, "", "")
@@ -371,14 +376,14 @@ func TestDoubleReversal_Rejected(t *testing.T) {
 	t.Logf("REFUND processed: %s", refundResult.TransactionID)
 
 	// Step 3: Try ROLLBACK on the same BET - should be rejected
-	rollbackReq := wagertransaction.Request{
+	rollbackReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "rollback-100",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-1",
 		Kind:                  "ROLLBACK",
-		Money:                 wagertransaction.MoneyDTO{Amount: "50.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "50.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-100",
 	}
 	rollbackResult, err := svc.ProcessTransaction(ctx, rollbackReq, "", "")
@@ -396,20 +401,20 @@ func TestDoubleReversal_CrossType_Rejected(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000020"
 	playerID := "00000000-0000-0000-0000-000000000021"
 	providerID := "prov-cross-reversal"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-cross-reversal", 100000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
 	// Step 1: Process a BET
-	betReq := wagertransaction.Request{
+	betReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-200",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-2",
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "30.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "30.00", Currency: "BRL"},
 	}
 	betResult, err := svc.ProcessTransaction(ctx, betReq, "", "")
 	if err != nil {
@@ -418,14 +423,14 @@ func TestDoubleReversal_CrossType_Rejected(t *testing.T) {
 	t.Logf("BET processed: %s", betResult.TransactionID)
 
 	// Step 2: ROLLBACK the BET
-	rollbackReq := wagertransaction.Request{
+	rollbackReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "rollback-200",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-2",
 		Kind:                  "ROLLBACK",
-		Money:                 wagertransaction.MoneyDTO{Amount: "30.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "30.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-200",
 	}
 	rollbackResult, err := svc.ProcessTransaction(ctx, rollbackReq, "", "")
@@ -435,14 +440,14 @@ func TestDoubleReversal_CrossType_Rejected(t *testing.T) {
 	t.Logf("ROLLBACK processed: %s", rollbackResult.TransactionID)
 
 	// Step 3: Try REFUND on the same BET - should be rejected (cross-type double reversal)
-	refundReq := wagertransaction.Request{
+	refundReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "refund-200",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-2",
 		Kind:                  "REFUND",
-		Money:                 wagertransaction.MoneyDTO{Amount: "30.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "30.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-200",
 	}
 	refundResult, err := svc.ProcessTransaction(ctx, refundReq, "", "")
@@ -460,7 +465,7 @@ func TestLossProducesNoLedgerEntry(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000030"
 	playerID := "00000000-0000-0000-0000-000000000031"
 	providerID := "prov-loss"
-	seedWallet(t, pool, walletID, 50000)
+	seedWallet(t, pool, walletID, playerID, "prov-loss", 50000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
@@ -473,14 +478,14 @@ func TestLossProducesNoLedgerEntry(t *testing.T) {
 	}
 
 	// Process a LOSS
-	lossReq := wagertransaction.Request{
+	lossReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "loss-100",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-3",
 		Kind:                  "LOSS",
-		Money:                 wagertransaction.MoneyDTO{Amount: "0.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "0.00", Currency: "BRL"},
 	}
 	lossResult, err := svc.ProcessTransaction(ctx, lossReq, "", "")
 	if err != nil {
@@ -530,20 +535,20 @@ func TestReferenceResolution_PendingThenArrives(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000040"
 	playerID := "00000000-0000-0000-0000-000000000041"
 	providerID := "prov-ref-pending"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-ref-pending", 100000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
 	// Step 1: Process a BET (will be in PENDING state initially)
-	betReq := wagertransaction.Request{
+	betReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-pending-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-pending-1",
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
 	}
 	betResult, err := svc.ProcessTransaction(ctx, betReq, "", "")
 	if err != nil {
@@ -562,14 +567,14 @@ func TestReferenceResolution_PendingThenArrives(t *testing.T) {
 	}
 
 	// Step 3: REFUND should go to PENDING_REFERENCE
-	refundReq := wagertransaction.Request{
+	refundReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "refund-pending-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-pending-1",
 		Kind:                  "REFUND",
-		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-pending-1",
 	}
 	refundResult, err := svc.ProcessTransaction(ctx, refundReq, "", "")
@@ -606,20 +611,20 @@ func TestReferenceResolution_MaxRetriesExhausted(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000050"
 	playerID := "00000000-0000-0000-0000-000000000051"
 	providerID := "prov-ref-max-retry"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-ref-max-retry", 100000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
 	// Step 1: Process a BET
-	betReq := wagertransaction.Request{
+	betReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-max-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-max-1",
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "10.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "10.00", Currency: "BRL"},
 	}
 	betResult, err := svc.ProcessTransaction(ctx, betReq, "", "")
 	if err != nil {
@@ -636,14 +641,14 @@ func TestReferenceResolution_MaxRetriesExhausted(t *testing.T) {
 	}
 
 	// Step 2: REFUND goes to PENDING_REFERENCE
-	refundReq := wagertransaction.Request{
+	refundReq := Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "refund-max-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		RoundID:               "round-max-1",
 		Kind:                  "REFUND",
-		Money:                 wagertransaction.MoneyDTO{Amount: "10.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "10.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-max-1",
 	}
 	refundResult, err := svc.ProcessTransaction(ctx, refundReq, "", "")
@@ -675,7 +680,7 @@ func TestConcurrentInstances_SeparateConnections(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000060"
 	playerID := "00000000-0000-0000-0000-000000000061"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "test-inst", 100000)
 
 	// Create 3 separate pgxpool connections to simulate 3 independent instances
 	ctx := context.Background()
@@ -692,20 +697,20 @@ func TestConcurrentInstances_SeparateConnections(t *testing.T) {
 	var wg sync.WaitGroup
 	processed := make(chan string, goroutines)
 
-	services := []*wagertransaction.Service{svc1, svc2, svc3}
+	services := []*Service{svc1, svc2, svc3}
 
 	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			svc := services[idx%3]
-			req := wagertransaction.Request{
-				ProviderID:            fmt.Sprintf("prov-inst-%d", idx),
+			req := Request{
+				ProviderID:            "test-inst",
 				ExternalTransactionID: fmt.Sprintf("ext-inst-%d", idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
-				Money: wagertransaction.MoneyDTO{
+				Money: MoneyDTO{
 					Amount:   "5.00",
 					Currency: "BRL",
 				},
@@ -750,8 +755,8 @@ func TestConcurrentWallets_Independent(t *testing.T) {
 	walletB := "00000000-0000-0000-0000-000000000071"
 	playerA := "00000000-0000-0000-0000-00000000007A"
 	playerB := "00000000-0000-0000-0000-00000000007B"
-	seedWallet(t, pool, walletA, 50000)
-	seedWallet(t, pool, walletB, 50000)
+	seedWallet(t, pool, walletA, playerA, "test-pw-a", 50000)
+	seedWallet(t, pool, walletB, playerB, "test-pw-b", 50000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
@@ -765,13 +770,13 @@ func TestConcurrentWallets_Independent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			reqA := wagertransaction.Request{
-				ProviderID:            fmt.Sprintf("prov-pw-a-%d", idx),
+			reqA := Request{
+				ProviderID:            "test-pw-a",
 				ExternalTransactionID: fmt.Sprintf("ext-pw-a-%d", idx),
 				PlayerID:              playerA,
 				WalletID:              walletA,
 				Kind:                  "BET",
-				Money:                 wagertransaction.MoneyDTO{Amount: "10.00", Currency: "BRL"},
+				Money:                 MoneyDTO{Amount: "10.00", Currency: "BRL"},
 			}
 			result, err := svc.ProcessTransaction(ctx, reqA, "", "")
 			if err == nil {
@@ -781,13 +786,13 @@ func TestConcurrentWallets_Independent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			reqB := wagertransaction.Request{
-				ProviderID:            fmt.Sprintf("prov-pw-b-%d", idx),
+			reqB := Request{
+				ProviderID:            "test-pw-b",
 				ExternalTransactionID: fmt.Sprintf("ext-pw-b-%d", idx),
 				PlayerID:              playerB,
 				WalletID:              walletB,
 				Kind:                  "BET",
-				Money:                 wagertransaction.MoneyDTO{Amount: "10.00", Currency: "BRL"},
+				Money:                 MoneyDTO{Amount: "10.00", Currency: "BRL"},
 			}
 			result, err := svc.ProcessTransaction(ctx, reqB, "", "")
 			if err == nil {
@@ -832,18 +837,18 @@ func TestIdempotentRedelivery_SimulatedCrash(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000080"
 	playerID := "00000000-0000-0000-0000-000000000081"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-redelivery", 100000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
-	req := wagertransaction.Request{
+	req := Request{
 		ProviderID:            "prov-redelivery",
 		ExternalTransactionID: "ext-redelivery-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "15.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "15.00", Currency: "BRL"},
 	}
 	idempotencyKey := "prov-redelivery:ext-redelivery-1"
 
@@ -889,42 +894,42 @@ func TestRestart_ConsistencyVerification(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-000000000090"
 	playerID := "00000000-0000-0000-0000-000000000091"
-	seedWallet(t, pool, walletID, 200000)
+	seedWallet(t, pool, walletID, playerID, "prov-restart", 200000)
 
 	svc1 := createTestService(t, pool)
 	ctx := context.Background()
 
-	betResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+	betResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            "prov-restart",
 		ExternalTransactionID: "bet-restart-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "30.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "30.00", Currency: "BRL"},
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process BET: %v", err)
 	}
 
-	winResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+	winResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            "prov-restart",
 		ExternalTransactionID: "win-restart-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "WIN",
-		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process WIN: %v", err)
 	}
 
-	lossResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+	lossResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            "prov-restart",
 		ExternalTransactionID: "loss-restart-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "LOSS",
-		Money:                 wagertransaction.MoneyDTO{Amount: "0.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "0.00", Currency: "BRL"},
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process LOSS: %v", err)
@@ -973,18 +978,18 @@ func TestLedgerImmutability_UpdateAndDeleteBlocked(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-0000000000B0"
 	playerID := "00000000-0000-0000-0000-0000000000B1"
 	providerID := "prov-ledger-immut"
-	seedWallet(t, pool, walletID, 50000)
+	seedWallet(t, pool, walletID, playerID, "prov-ledger-immut", 50000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
-	betResult, err := svc.ProcessTransaction(ctx, wagertransaction.Request{
+	betResult, err := svc.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-ledger-immut-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "10.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "10.00", Currency: "BRL"},
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process BET: %v", err)
@@ -1029,18 +1034,18 @@ func TestCrashBetweenCommitAndSQSDelete_Redelivery(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-0000000000C0"
 	playerID := "00000000-0000-0000-0000-0000000000C1"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-crash-redeliver", 100000)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
-	req := wagertransaction.Request{
+	req := Request{
 		ProviderID:            "prov-crash-redeliver",
 		ExternalTransactionID: "ext-crash-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "25.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "25.00", Currency: "BRL"},
 	}
 	idempotencyKey := "prov-crash-redeliver:ext-crash-1"
 	messageID := "sqs-msg-crash-001"
@@ -1088,19 +1093,19 @@ func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-0000000000D0"
 	playerID := "00000000-0000-0000-0000-0000000000D1"
 	providerID := "prov-async-pending"
-	seedWallet(t, pool, walletID, 100000)
+	seedWallet(t, pool, walletID, playerID, "prov-async-pending", 100000)
 
 	svc1 := createTestService(t, pool)
 	svc2 := createTestService(t, pool)
 	ctx := context.Background()
 
-	betResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+	betResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-async-pending-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process BET: %v", err)
@@ -1114,13 +1119,13 @@ func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 		t.Fatalf("set BET to PENDING: %v", err)
 	}
 
-	refundResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+	refundResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "refund-async-pending-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "REFUND",
-		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-async-pending-1",
 	}, "", "")
 	if err != nil {
@@ -1139,7 +1144,7 @@ func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 	}
 
 	var resolveErr1, resolveErr2 error
-	var resolveResult1, resolveResult2 *wagertransaction.ProcessResult
+	var resolveResult1, resolveResult2 *ProcessResult
 	var wg sync.WaitGroup
 
 	wg.Add(2)
@@ -1185,30 +1190,30 @@ func TestReversalInsufficientBalance_DifferentCode(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-0000000000A0"
 	playerID := "00000000-0000-0000-0000-0000000000A1"
 	providerID := "prov-rev-insuf"
-	seedWallet(t, pool, walletID, 500)
+	seedWallet(t, pool, walletID, playerID, "prov-rev-insuf", 500)
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
-	betResult, err := svc.ProcessTransaction(ctx, wagertransaction.Request{
+	betResult, err := svc.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "bet-rev-insuf-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
-		Money:                 wagertransaction.MoneyDTO{Amount: "5.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "5.00", Currency: "BRL"},
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process BET: %v", err)
 	}
 
-	rollbackResult, err := svc.ProcessTransaction(ctx, wagertransaction.Request{
+	rollbackResult, err := svc.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "rollback-rev-insuf-1",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "ROLLBACK",
-		Money:                 wagertransaction.MoneyDTO{Amount: "5.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "5.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-rev-insuf-1",
 	}, "", "")
 	if err != nil {
@@ -1216,13 +1221,13 @@ func TestReversalInsufficientBalance_DifferentCode(t *testing.T) {
 	}
 	t.Logf("ROLLBACK processed: tx=%s status=%s", rollbackResult.TransactionID, rollbackResult.Status)
 
-	secondRollback, err := svc.ProcessTransaction(ctx, wagertransaction.Request{
+	secondRollback, err := svc.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
 		ExternalTransactionID: "rollback-rev-insuf-2",
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "ROLLBACK",
-		Money:                 wagertransaction.MoneyDTO{Amount: "5.00", Currency: "BRL"},
+		Money:                 MoneyDTO{Amount: "5.00", Currency: "BRL"},
 		ReferenceExternalID:   "bet-rev-insuf-1",
 	}, "", "")
 	if err != nil {

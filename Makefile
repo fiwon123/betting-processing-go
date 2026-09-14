@@ -25,15 +25,20 @@ test_unit:
 
 test_integration:
 	@echo "Running integration tests (requires TEST_DATABASE_URL)..."
-	@echo "Start test DB: docker compose -f docker-compose.test.yml up -d postgres migrate"
+	@echo "Start test DB: docker compose --env-file .env.test -f docker-compose.test.yml up -d postgres migrate"
 	@echo "Then set: export TEST_DATABASE_URL=postgresql://api_test:api_test@localhost:5433/api_test?sslmode=disable"
 	go test -v -race -count=1 -tags=integration -timeout=300s ./...
 
 test_e2e:
 	@echo "Running e2e tests (full stack)..."
-	docker compose -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
-	docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
-	docker compose -f docker-compose.test.yml down -v --remove-orphans
+	docker compose --env-file .env.test -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
+	docker compose --env-file .env.test -f docker-compose.test.yml up --build -d
+	@echo "Waiting for test-runner to finish..."
+	@until [ "$$(docker inspect betting-processing-go-test-runner-1 --format='{{.State.Status}}' 2>/dev/null)" = "exited" ]; do sleep 2; done
+	@EXIT_CODE=$$(docker inspect betting-processing-go-test-runner-1 --format='{{.State.ExitCode}}' 2>/dev/null || echo "1"); \
+	docker compose --env-file .env.test -f docker-compose.test.yml logs test-runner; \
+	docker compose --env-file .env.test -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true; \
+	exit $$EXIT_CODE
 
 test_all: test_unit test_e2e
 

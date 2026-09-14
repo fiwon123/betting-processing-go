@@ -190,6 +190,14 @@ func (s *Service) GetLedger(
 	)
 }
 
+func (s *Service) GetBalance(ctx context.Context, walletID string) (money.Money, error) {
+	w, err := s.repo.FindByID(ctx, walletID)
+	if err != nil {
+		return money.Money{}, err
+	}
+	return w.Balance(), nil
+}
+
 func (s *Service) Debit(
 	ctx context.Context,
 	dbTx domain.DBTx,

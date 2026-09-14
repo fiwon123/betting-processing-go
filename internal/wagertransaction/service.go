@@ -21,6 +21,7 @@ const (
 type WalletService interface {
 	Debit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (balanceBefore money.Money, balanceAfter money.Money, walletVersion int64, err error)
 	Credit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (balanceBefore money.Money, balanceAfter money.Money, walletVersion int64, err error)
+	GetBalance(ctx context.Context, walletID string) (money.Money, error)
 }
 
 type Service struct {
@@ -892,11 +893,11 @@ func (s *Service) commitWithLedger(ctx context.Context, dbTx domain.DBTx, tx *Tr
 }
 
 func (s *Service) getWalletBalance(ctx context.Context, walletID string) (money.Money, error) {
-	w, err := s.repo.FindByID(ctx, walletID)
+	w, err := s.walletSvc.GetBalance(ctx, walletID)
 	if err != nil {
 		return money.Money{}, fmt.Errorf("get wallet balance: %w", err)
 	}
-	return w.Amount(), nil
+	return w, nil
 }
 
 func (s *Service) result(tx *Transaction, balance money.Money) (*ProcessResult, error) {
