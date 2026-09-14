@@ -13,4 +13,4 @@ COPY scripts/ ./scripts/
 
 RUN mkdir -p /app/test-results
 
-CMD ["go", "test", "-v", "-race", "-count=1", "-tags=integration", "-timeout=300s", "./..."]
+CMD ["sh", "-c", "go test -v -race -count=1 -tags='integration e2e' -timeout=300s ./..."]

@@ -214,9 +214,6 @@ func (h *WagerTransactionHandler) Create(w http.ResponseWriter, r *http.Request)
 	}
 
 	status := http.StatusCreated
-	if result.Status == "REJECTED" {
-		status = http.StatusUnprocessableEntity
-	}
 	if result.IdempotentReplay {
 		status = http.StatusOK
 	}

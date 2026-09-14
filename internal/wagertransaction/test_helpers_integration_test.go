@@ -15,6 +15,14 @@ type testRepo struct {
 	pool *pgxpool.Pool
 }
 
+func mustMoney(amount int64, currency money.Currency) money.Money {
+	m, err := money.NewMoney(amount, currency)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
 func (r *testRepo) FindByIdempotencyKey(ctx context.Context, provider, idempotencyKey string) (*Transaction, error) {
 	var id, externalID, walletID, playerID string
 	var status string
@@ -79,7 +87,7 @@ func (r *testRepo) FindByProviderAndExternalID(ctx context.Context, provider, ex
 	if err != nil {
 		return nil, ErrTransactionNotFound
 	}
-	bal := money.NewMoney(amount, money.Currency(currencyStr))
+	bal := mustMoney(amount, money.Currency(currencyStr))
 	tx := RehydrateTransaction(
 		id, Origin(origin), extID, prov, idempotencyKey, payloadHash,
 		walletID, playerID, roundID, gameID,
@@ -140,7 +148,7 @@ func (r *testRepo) FindByID(ctx context.Context, id string) (*Transaction, error
 	if err != nil {
 		return nil, ErrTransactionNotFound
 	}
-	bal := money.NewMoney(amount, money.Currency(currencyStr))
+	bal := mustMoney(amount, money.Currency(currencyStr))
 	tx := RehydrateTransaction(
 		id, Origin(origin), extID, prov, idempotencyKey, payloadHash,
 		walletID, playerID, roundID, gameID,
@@ -151,7 +159,7 @@ func (r *testRepo) FindByID(ctx context.Context, id string) (*Transaction, error
 		createdAt, updatedAt, processedAt,
 	)
 	if resultBalance != nil {
-		rb := money.NewMoney(*resultBalance, money.Currency(currencyStr))
+		rb := mustMoney(*resultBalance, money.Currency(currencyStr))
 		tx.SetResultBalance(rb)
 	}
 	return tx, nil
@@ -347,8 +355,8 @@ func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID st
 	if err != nil {
 		return money.Money{}, money.Money{}, 0, err
 	}
-	balBefore := money.NewMoney(balance, amount.Currency())
-	balAfter := money.NewMoney(newBalance, amount.Currency())
+	balBefore := mustMoney(balance, amount.Currency())
+	balAfter := mustMoney(newBalance, amount.Currency())
 	return balBefore, balAfter, version + 1, nil
 }
 
@@ -369,8 +377,8 @@ func (w *testWalletSvc) Credit(ctx context.Context, dbTx domain.DBTx, walletID s
 	if err != nil {
 		return money.Money{}, money.Money{}, 0, err
 	}
-	balBefore := money.NewMoney(balance, amount.Currency())
-	balAfter := money.NewMoney(newBalance, amount.Currency())
+	balBefore := mustMoney(balance, amount.Currency())
+	balAfter := mustMoney(newBalance, amount.Currency())
 	return balBefore, balAfter, version + 1, nil
 }
 

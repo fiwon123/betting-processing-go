@@ -163,13 +163,16 @@ services:
     depends_on:
       keycloak:
         condition: service_started
+      postgres:
+        condition: service_healthy
     volumes:
       - ./scripts/keycloak/setup-test-realm.sh:/scripts/setup-test-realm.sh:ro
-    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null 2>&1 && /bin/sh /scripts/setup-test-realm.sh"]
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq postgresql-client >/dev/null 2>&1 && /bin/sh /scripts/setup-test-realm.sh"]
     environment:
       KC_URL: http://keycloak:8080
       KC_ADMIN_USERNAME: admin
       KC_ADMIN_PASSWORD: admin
+      KC_DB_URL: postgresql://${KC_DB_USER:-keycloak_test}:${KC_DB_PASSWORD:-keycloak_test}@postgres:5432/${KC_DB:-keycloak_test}
     restart: "no"
 
   test-runner:
@@ -177,7 +180,7 @@ services:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      TEST_DATABASE_URL: postgresql://api_test:api_test@postgres:5432/api_test?sslmode=disable
+      TEST_DATABASE_URL: postgresql://${API_DB_USER:-api_test}:${API_DB_PASSWORD:-api_test}@postgres:5432/${API_DB:-api_test}?sslmode=disable
       API_BASE_URL: http://api:8080
       KC_URL: http://keycloak:8080
       KC_REALM: betting

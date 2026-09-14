@@ -337,9 +337,8 @@ Gerenciado por `migrate/migrate` (10 migrations):
 | `000006` | Adiciona `ref_attempts` e `ref_next_attempt_at` em `wager_transactions` para resolução de referência pendente. |
 | `000007` | Adiciona `result_balance` em `wager_transactions` para cache do saldo após processamento. |
 | `000008` | Adiciona `provider_id` em `wallets` e atualiza a constraint única. |
-| `000009` | Restaura `DEFAULT gen_random_uuid()` em todas as tabelas (id, wallet_id). |
-| `000010` | Remove `wallets_player_currency_uq` — suporte a múltiplos provedores por jogador. A identidade da carteira passa a ser `(player_id, currency, provider_id)` ao invés de apenas `(player_id, currency)`. A única carteira por jogador continua garantida dentro do mesmo provedor. |
-| `000011` | Unique index parcial `wager_transactions_one_successful_reversal_uq` — impede que duas reversões (REFUND ou ROLLBACK) bem-sucedidas apontem para a mesma referência. Previne race conditions na verificação de dupla reversão. |
+| `000009` | Remove `wallets_player_currency_uq` — suporte a múltiplos provedores por jogador. A identidade da carteira passa a ser `(player_id, currency, provider_id)`. |
+| `000010` | Unique index parcial `wager_transactions_one_successful_reversal_uq` — impede que duas reversões (REFUND ou ROLLBACK) bem-sucedidas apontem para a mesma referência. Previne race conditions na verificação de dupla reversão. |
 
 ## 17. Observabilidade
 

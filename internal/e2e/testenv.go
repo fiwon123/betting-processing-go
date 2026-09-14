@@ -106,6 +106,10 @@ func (e *TestEnv) GetToken(username, password string) (string, error) {
 }
 
 func (e *TestEnv) DoRequest(method, path string, token string, body interface{}) (*http.Response, error) {
+	return e.DoRequestWithHeaders(method, path, token, body, nil)
+}
+
+func (e *TestEnv) DoRequestWithHeaders(method, path string, token string, body interface{}, extraHeaders map[string]string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
@@ -123,6 +127,9 @@ func (e *TestEnv) DoRequest(method, path string, token string, body interface{})
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
 	}
 
 	return e.HTTPClient.Do(req)

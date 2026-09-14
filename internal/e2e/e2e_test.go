@@ -33,7 +33,7 @@ func TestE2E_WalletCreate(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	body := map[string]interface{}{
-		"playerId": "player-e2e-1",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
 		"initialBalance": map[string]string{
 			"amount":   "100.00",
 			"currency": "BRL",
@@ -60,7 +60,7 @@ func TestE2E_WalletCreateDuplicate(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	body := map[string]interface{}{
-		"playerId": "player-e2e-dup",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567892",
 		"initialBalance": map[string]string{
 			"amount":   "50.00",
 			"currency": "BRL",
@@ -93,7 +93,7 @@ func TestE2E_WalletGet(t *testing.T) {
 
 	// Create wallet first
 	createBody := map[string]interface{}{
-		"playerId": "player-e2e-get",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567893",
 		"initialBalance": map[string]string{
 			"amount":   "200.00",
 			"currency": "BRL",
@@ -133,7 +133,7 @@ func TestE2E_BetProcesssed(t *testing.T) {
 
 	// Create wallet
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-bet",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567894",
 		"initialBalance": map[string]string{
 			"amount":   "500.00",
 			"currency": "BRL",
@@ -150,7 +150,7 @@ func TestE2E_BetProcesssed(t *testing.T) {
 	betBody := map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-bet-001",
-		"playerId":              "player-e2e-bet",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567894",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"gameId":                "game-1",
@@ -161,7 +161,9 @@ func TestE2E_BetProcesssed(t *testing.T) {
 		},
 	}
 
-	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, betBody)
+	betResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, betBody, map[string]string{
+		"Idempotency-Key": "provider1:e2e-bet-001",
+	})
 	if err != nil {
 		t.Fatalf("process bet: %v", err)
 	}
@@ -185,7 +187,7 @@ func TestE2E_WinProcessed(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-win",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567895",
 		"initialBalance": map[string]string{
 			"amount":   "100.00",
 			"currency": "BRL",
@@ -201,7 +203,7 @@ func TestE2E_WinProcessed(t *testing.T) {
 	winBody := map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-win-001",
-		"playerId":              "player-e2e-win",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567895",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"gameId":                "game-1",
@@ -212,7 +214,9 @@ func TestE2E_WinProcessed(t *testing.T) {
 		},
 	}
 
-	winResp, err := env.DoRequest("POST", "/wagering/transactions", token, winBody)
+	winResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, winBody, map[string]string{
+		"Idempotency-Key": "provider1:e2e-win-001",
+	})
 	if err != nil {
 		t.Fatalf("process win: %v", err)
 	}
@@ -232,7 +236,7 @@ func TestE2E_BetInsufficientBalance(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-insuf",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567896",
 		"initialBalance": map[string]string{
 			"amount":   "10.00",
 			"currency": "BRL",
@@ -248,7 +252,7 @@ func TestE2E_BetInsufficientBalance(t *testing.T) {
 	betBody := map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-insuf-001",
-		"playerId":              "player-e2e-insuf",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567896",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"gameId":                "game-1",
@@ -259,7 +263,9 @@ func TestE2E_BetInsufficientBalance(t *testing.T) {
 		},
 	}
 
-	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, betBody)
+	betResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, betBody, map[string]string{
+		"Idempotency-Key": "provider1:e2e-insuf-001",
+	})
 	if err != nil {
 		t.Fatalf("process bet: %v", err)
 	}
@@ -279,7 +285,7 @@ func TestE2E_IdempotentReplay(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-idem",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567897",
 		"initialBalance": map[string]string{
 			"amount":   "1000.00",
 			"currency": "BRL",
@@ -295,7 +301,7 @@ func TestE2E_IdempotentReplay(t *testing.T) {
 	betBody := map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-idem-001",
-		"playerId":              "player-e2e-idem",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567897",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"gameId":                "game-1",
@@ -307,7 +313,9 @@ func TestE2E_IdempotentReplay(t *testing.T) {
 	}
 
 	// First request
-	resp1, err := env.DoRequest("POST", "/wagering/transactions", token, betBody)
+	resp1, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, betBody, map[string]string{
+		"Idempotency-Key": "provider1:e2e-idem-001",
+	})
 	if err != nil {
 		t.Fatalf("first request: %v", err)
 	}
@@ -315,7 +323,9 @@ func TestE2E_IdempotentReplay(t *testing.T) {
 	resp1.Body.Close()
 
 	// Second request (idempotent replay)
-	resp2, err := env.DoRequest("POST", "/wagering/transactions", token, betBody)
+	resp2, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, betBody, map[string]string{
+		"Idempotency-Key": "provider1:e2e-idem-001",
+	})
 	if err != nil {
 		t.Fatalf("second request: %v", err)
 	}
@@ -335,7 +345,7 @@ func TestE2E_DoubleRefundRejected(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-dref",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567898",
 		"initialBalance": map[string]string{
 			"amount":   "500.00",
 			"currency": "BRL",
@@ -349,14 +359,16 @@ func TestE2E_DoubleRefundRejected(t *testing.T) {
 	walletID := createResult["id"].(string)
 
 	// Process BET
-	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	betResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-dref-bet",
-		"playerId":              "player-e2e-dref",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567898",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"kind":                  "BET",
 		"money":                 map[string]string{"amount": "100.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-dref-bet",
 	})
 	if err != nil {
 		t.Fatalf("process bet: %v", err)
@@ -364,15 +376,17 @@ func TestE2E_DoubleRefundRejected(t *testing.T) {
 	betResp.Body.Close()
 
 	// First REFUND
-	refund1Resp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	refund1Resp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":                     "provider1",
 		"externalTransactionId":          "e2e-dref-refund1",
-		"playerId":                       "player-e2e-dref",
+		"playerId":                       "a1b2c3d4-e5f6-7890-abcd-ef1234567898",
 		"walletId":                       walletID,
 		"roundId":                        "round-1",
 		"kind":                           "REFUND",
 		"money":                          map[string]string{"amount": "100.00", "currency": "BRL"},
 		"referenceExternalTransactionId": "e2e-dref-bet",
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-dref-refund1",
 	})
 	if err != nil {
 		t.Fatalf("first refund: %v", err)
@@ -382,15 +396,17 @@ func TestE2E_DoubleRefundRejected(t *testing.T) {
 	t.Logf("first refund: %v", refund1Result)
 
 	// Second REFUND (should be rejected)
-	refund2Resp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	refund2Resp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":                     "provider1",
 		"externalTransactionId":          "e2e-dref-refund2",
-		"playerId":                       "player-e2e-dref",
+		"playerId":                       "a1b2c3d4-e5f6-7890-abcd-ef1234567898",
 		"walletId":                       walletID,
 		"roundId":                        "round-1",
 		"kind":                           "REFUND",
 		"money":                          map[string]string{"amount": "100.00", "currency": "BRL"},
 		"referenceExternalTransactionId": "e2e-dref-bet",
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-dref-refund2",
 	})
 	if err != nil {
 		t.Fatalf("second refund: %v", err)
@@ -415,7 +431,7 @@ func TestE2E_ProviderIsolation(t *testing.T) {
 
 	// Provider1 creates wallet
 	createResp, err := env.DoRequest("POST", "/wallets", token1, map[string]interface{}{
-		"playerId": "player-e2e-iso",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567aaa",
 		"initialBalance": map[string]string{
 			"amount":   "100.00",
 			"currency": "BRL",
@@ -449,7 +465,7 @@ func TestE2E_ProviderCannotBetOnOtherProviderWallet(t *testing.T) {
 
 	// Provider1 creates wallet
 	createResp, err := env.DoRequest("POST", "/wallets", token1, map[string]interface{}{
-		"playerId": "player-e2e-iso2",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567899",
 		"initialBalance": map[string]string{
 			"amount":   "500.00",
 			"currency": "BRL",
@@ -463,14 +479,16 @@ func TestE2E_ProviderCannotBetOnOtherProviderWallet(t *testing.T) {
 	walletID := createResult["id"].(string)
 
 	// Provider2 tries to bet on Provider1's wallet - should be 403
-	betResp, err := env.DoRequest("POST", "/wagering/transactions", token2, map[string]interface{}{
+	betResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token2, map[string]interface{}{
 		"providerId":            "provider2",
 		"externalTransactionId": "e2e-iso-bet",
-		"playerId":              "player-e2e-iso2",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567899",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"kind":                  "BET",
 		"money":                 map[string]string{"amount": "10.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider2:e2e-iso-bet",
 	})
 	if err != nil {
 		t.Fatalf("bet: %v", err)
@@ -489,7 +507,7 @@ func TestE2E_ConcurrentBets_Idempotent(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-conc",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567bbb",
 		"initialBalance": map[string]string{
 			"amount":   "10000.00",
 			"currency": "BRL",
@@ -512,15 +530,16 @@ func TestE2E_ConcurrentBets_Idempotent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			resp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+			resp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 				"providerId":            "provider1",
 				"externalTransactionId": "e2e-conc-001",
-				"playerId":              "player-e2e-conc",
+				"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567bbb",
 				"walletId":              walletID,
 				"roundId":               "round-1",
 				"kind":                  "BET",
 				"money":                 map[string]string{"amount": "5.00", "currency": "BRL"},
-				"idempotencyKey":        idempotencyKey,
+			}, map[string]string{
+				"Idempotency-Key": idempotencyKey,
 			})
 			if err != nil {
 				t.Errorf("goroutine %d: %v", idx, err)
@@ -548,7 +567,7 @@ func TestE2E_TwoBetsOn100Balance(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-80",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567ccc",
 		"initialBalance": map[string]string{
 			"amount":   "100.00",
 			"currency": "BRL",
@@ -569,14 +588,16 @@ func TestE2E_TwoBetsOn100Balance(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			resp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+			resp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 				"providerId":            "provider1",
 				"externalTransactionId": fmt.Sprintf("e2e-80-bet-%d", idx),
-				"playerId":              "player-e2e-80",
+				"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567ccc",
 				"walletId":              walletID,
 				"roundId":               "round-1",
 				"kind":                  "BET",
 				"money":                 map[string]string{"amount": "80.00", "currency": "BRL"},
+			}, map[string]string{
+				"Idempotency-Key": fmt.Sprintf("provider1:e2e-80-bet-%d", idx),
 			})
 			if err != nil {
 				t.Errorf("goroutine %d: %v", idx, err)
@@ -666,7 +687,7 @@ func TestE2E_Unauthorized_NoSideEffects(t *testing.T) {
 	betBody := map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-unauth-001",
-		"playerId":              "player-e2e-unauth",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567ddd",
 		"walletId":              "00000000-0000-0000-0000-000000000001",
 		"roundId":               "round-1",
 		"kind":                  "BET",
@@ -684,7 +705,7 @@ func TestE2E_Unauthorized_NoSideEffects(t *testing.T) {
 	}
 
 	createResp, err := env.DoRequest("POST", "/wallets", "", map[string]interface{}{
-		"playerId":       "player-e2e-unauth-create",
+		"playerId":       "a1b2c3d4-e5f6-7890-abcd-ef1234567dd1",
 		"initialBalance": map[string]string{"amount": "100.00", "currency": "BRL"},
 	})
 	if err != nil {
@@ -704,7 +725,7 @@ func TestE2E_WalletBalance_AfterBetAndWin(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-bal",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567eee",
 		"initialBalance": map[string]string{
 			"amount":   "100.00",
 			"currency": "BRL",
@@ -717,14 +738,16 @@ func TestE2E_WalletBalance_AfterBetAndWin(t *testing.T) {
 	createResp.Body.Close()
 	walletID := createResult["id"].(string)
 
-	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	betResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-bal-bet",
-		"playerId":              "player-e2e-bal",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567eee",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"kind":                  "BET",
 		"money":                 map[string]string{"amount": "60.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-bal-bet",
 	})
 	if err != nil {
 		t.Fatalf("bet: %v", err)
@@ -735,14 +758,16 @@ func TestE2E_WalletBalance_AfterBetAndWin(t *testing.T) {
 		t.Fatalf("expected 201 for bet, got %d", betResp.StatusCode)
 	}
 
-	winResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	winResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-bal-win",
-		"playerId":              "player-e2e-bal",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567eee",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"kind":                  "WIN",
 		"money":                 map[string]string{"amount": "20.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-bal-win",
 	})
 	if err != nil {
 		t.Fatalf("win: %v", err)
@@ -774,7 +799,7 @@ func TestE2E_ReferenceChain_BetRefundRollback(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-chain",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef1234567fff",
 		"initialBalance": map[string]string{
 			"amount":   "1000.00",
 			"currency": "BRL",
@@ -787,44 +812,50 @@ func TestE2E_ReferenceChain_BetRefundRollback(t *testing.T) {
 	createResp.Body.Close()
 	walletID := createResult["id"].(string)
 
-	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	betResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-chain-bet",
-		"playerId":              "player-e2e-chain",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef1234567fff",
 		"walletId":              walletID,
 		"roundId":               "round-1",
 		"kind":                  "BET",
 		"money":                 map[string]string{"amount": "100.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-chain-bet",
 	})
 	if err != nil {
 		t.Fatalf("bet: %v", err)
 	}
 	betResp.Body.Close()
 
-	refundResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	refundResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":                     "provider1",
 		"externalTransactionId":          "e2e-chain-refund",
-		"playerId":                       "player-e2e-chain",
+		"playerId":                       "a1b2c3d4-e5f6-7890-abcd-ef1234567fff",
 		"walletId":                       walletID,
 		"roundId":                        "round-1",
 		"kind":                           "REFUND",
 		"money":                          map[string]string{"amount": "100.00", "currency": "BRL"},
 		"referenceExternalTransactionId": "e2e-chain-bet",
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-chain-refund",
 	})
 	if err != nil {
 		t.Fatalf("refund: %v", err)
 	}
 	refundResp.Body.Close()
 
-	rollbackResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	rollbackResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":                     "provider1",
 		"externalTransactionId":          "e2e-chain-rollback",
-		"playerId":                       "player-e2e-chain",
+		"playerId":                       "a1b2c3d4-e5f6-7890-abcd-ef1234567fff",
 		"walletId":                       walletID,
 		"roundId":                        "round-1",
 		"kind":                           "ROLLBACK",
 		"money":                          map[string]string{"amount": "100.00", "currency": "BRL"},
 		"referenceExternalTransactionId": "e2e-chain-bet",
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-chain-rollback",
 	})
 	if err != nil {
 		t.Fatalf("rollback: %v", err)
@@ -849,7 +880,7 @@ func TestE2E_HTTPAndSQS_SameWalletConsistency(t *testing.T) {
 	token := getProviderToken(t, env, "provider1", "provider1")
 
 	walletResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
-		"playerId": "player-e2e-cross",
+		"playerId": "a1b2c3d4-e5f6-7890-abcd-ef123456a000",
 		"initialBalance": map[string]string{
 			"amount":   "200.00",
 			"currency": "BRL",
@@ -860,17 +891,19 @@ func TestE2E_HTTPAndSQS_SameWalletConsistency(t *testing.T) {
 	}
 	walletResult := ReadBody(walletResp)
 	walletResp.Body.Close()
-	walletID := walletResult["walletId"].(string)
+	walletID := walletResult["id"].(string)
 	t.Logf("wallet created: %s", walletID)
 
-	httpBetResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	httpBetResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-cross-http-bet",
-		"playerId":              "player-e2e-cross",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef123456a000",
 		"walletId":              walletID,
 		"roundId":               "round-cross",
 		"kind":                  "BET",
 		"money":                 map[string]string{"amount": "30.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-cross-http-bet",
 	})
 	if err != nil {
 		t.Fatalf("HTTP BET: %v", err)
@@ -884,13 +917,18 @@ func TestE2E_HTTPAndSQS_SameWalletConsistency(t *testing.T) {
 	}
 
 	sqsBetBody, _ := json.Marshal(map[string]interface{}{
-		"providerId":            "provider1",
-		"externalTransactionId": "e2e-cross-sqs-bet",
-		"playerId":              "player-e2e-cross",
-		"walletId":              walletID,
-		"roundId":               "round-cross",
-		"kind":                  "BET",
-		"money":                 map[string]string{"amount": "20.00", "currency": "BRL"},
+		"messageId":  fmt.Sprintf("e2e-cross-sqs-%d", time.Now().UnixNano()),
+		"type":       "WagerTransaction",
+		"occurredAt": time.Now().UTC().Format(time.RFC3339),
+		"data": map[string]interface{}{
+			"providerId":            "provider1",
+			"externalTransactionId": "e2e-cross-sqs-bet",
+			"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef123456a000",
+			"walletId":              walletID,
+			"roundId":               "round-cross",
+			"kind":                  "BET",
+			"money":                 map[string]string{"amount": "20.00", "currency": "BRL"},
+		},
 	})
 	_, err = env.SendSQSMessage(t.Context(), string(sqsBetBody))
 	if err != nil {
@@ -915,14 +953,16 @@ func TestE2E_HTTPAndSQS_SameWalletConsistency(t *testing.T) {
 		t.Errorf("balance mismatch: got %s, want %s (200 - 30 HTTP - 20 SQS)", balanceStr, expectedBalance)
 	}
 
-	httpWinResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+	httpWinResp, err := env.DoRequestWithHeaders("POST", "/wagering/transactions", token, map[string]interface{}{
 		"providerId":            "provider1",
 		"externalTransactionId": "e2e-cross-http-win",
-		"playerId":              "player-e2e-cross",
+		"playerId":              "a1b2c3d4-e5f6-7890-abcd-ef123456a000",
 		"walletId":              walletID,
 		"roundId":               "round-cross",
 		"kind":                  "WIN",
 		"money":                 map[string]string{"amount": "10.00", "currency": "BRL"},
+	}, map[string]string{
+		"Idempotency-Key": "provider1:e2e-cross-http-win",
 	})
 	if err != nil {
 		t.Fatalf("HTTP WIN: %v", err)
