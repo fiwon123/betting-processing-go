@@ -5,6 +5,7 @@ package wagertransaction
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/domain"
@@ -400,6 +401,7 @@ func newTestRepo(pool *pgxpool.Pool) *testRepo {
 
 type testWalletSvc struct {
 	pool *pgxpool.Pool
+	t   *testing.T
 }
 
 func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
@@ -409,9 +411,15 @@ func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID st
 		`SELECT balance, version FROM wallets WHERE id = $1 FOR UPDATE`, walletID,
 	).Scan(&balance, &version)
 	if err != nil {
+		if w.t != nil {
+			w.t.Logf("[Debit] wallet=%s SELECT error: %v", walletID, err)
+		}
 		return money.Money{}, money.Money{}, 0, err
 	}
 	if balance < amount.Amount() {
+		if w.t != nil {
+			w.t.Logf("[Debit] wallet=%s INSUFFICIENT balance=%d amount=%d", walletID, balance, amount.Amount())
+		}
 		return money.Money{}, money.Money{}, 0, ErrInsufficientBalance
 	}
 	newBalance := balance - amount.Amount()
@@ -420,10 +428,16 @@ func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID st
 		newBalance, walletID, version,
 	)
 	if err != nil {
+		if w.t != nil {
+			w.t.Logf("[Debit] wallet=%s UPDATE error: %v", walletID, err)
+		}
 		return money.Money{}, money.Money{}, 0, err
 	}
 	balBefore := mustMoney(balance, amount.Currency())
 	balAfter := mustMoney(newBalance, amount.Currency())
+	if w.t != nil {
+		w.t.Logf("[Debit] wallet=%s OK balance=%d->%d version=%d->%d", walletID, balance, newBalance, version, version+1)
+	}
 	return balBefore, balAfter, version + 1, nil
 }
 
@@ -461,8 +475,8 @@ func (w *testWalletSvc) GetBalance(ctx context.Context, walletID string) (money.
 	return mustMoney(balance, money.Currency(currency)), nil
 }
 
-func newTestWalletSvc(pool *pgxpool.Pool) *testWalletSvc {
-	return &testWalletSvc{pool: pool}
+func newTestWalletSvc(pool *pgxpool.Pool, t *testing.T) *testWalletSvc {
+	return &testWalletSvc{pool: pool, t: t}
 }
 
 type testInboxRepo struct{}

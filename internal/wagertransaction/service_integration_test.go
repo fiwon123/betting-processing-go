@@ -26,7 +26,7 @@ func mustPool(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	cfg.MaxConns = 20
+	cfg.MaxConns = 100
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -50,7 +50,7 @@ func seedWallet(t *testing.T, pool *pgxpool.Pool, walletID, playerID, providerID
 func createTestService(t *testing.T, pool *pgxpool.Pool) *Service {
 	t.Helper()
 	repo := newTestRepo(pool)
-	walletSvc := newTestWalletSvc(pool)
+	walletSvc := newTestWalletSvc(pool, t)
 	inboxRepo := newTestInboxRepo(pool)
 	outboxRepo := newTestOutboxRepo(pool)
 	txManager := newTestTxManager(pool)
@@ -1238,5 +1238,138 @@ func TestReversalInsufficientBalance_DifferentCode(t *testing.T) {
 
 	if secondRollback.Status != "REJECTED" {
 		t.Errorf("expected second ROLLBACK rejected, got %s", secondRollback.Status)
+	}
+}
+
+func TestDiagnostic_IdempotentReplay(t *testing.T) {
+	pool := mustPool(t)
+	walletID := "00000000-0000-0000-0000-000000000002"
+	playerID := "00000000-0000-0000-0000-000000000020"
+	providerID := "prov-idempotent"
+	seedBalance := int64(100000)
+	seedWallet(t, pool, walletID, playerID, providerID, seedBalance)
+
+	// Log wallet state right after seed
+	var preBalance int64
+	var preVersion int64
+	err := pool.QueryRow(context.Background(),
+		`SELECT balance, version FROM wallets WHERE id = $1`, walletID,
+	).Scan(&preBalance, &preVersion)
+	if err != nil {
+		t.Fatalf("pre-seed read: %v", err)
+	}
+	t.Logf("POST-SEED STATE: wallet=%s balance=%d version=%d", walletID, preBalance, preVersion)
+	if preBalance != seedBalance {
+		t.Fatalf("unexpected seed balance: got %d, want %d", preBalance, seedBalance)
+	}
+
+	svc := createTestService(t, pool)
+
+	req := Request{
+		ProviderID:            providerID,
+		ExternalTransactionID: "ext-diag",
+		PlayerID:              playerID,
+		WalletID:              walletID,
+		Kind:                  "BET",
+		Money: MoneyDTO{
+			Amount:   "5.00",
+			Currency: "BRL",
+		},
+	}
+	key := req.ProviderID + ":" + req.ExternalTransactionID
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	results := make([]*ProcessResult, goroutines)
+	errs := make([]error, goroutines)
+	var mu sync.Mutex
+	var processed, idempotentReplay, failed int
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			result, err := svc.ProcessTransaction(context.Background(), req, key, "")
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs[idx] = err
+				failed++
+				t.Logf("goroutine %d: ERROR %v", idx, err)
+			} else {
+				results[idx] = result
+				if result.IdempotentReplay {
+					idempotentReplay++
+				} else {
+					processed++
+				}
+				t.Logf("goroutine %d: OK status=%s txid=%s balance=%s replay=%v", idx, result.Status, result.TransactionID, result.Balance, result.IdempotentReplay)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	t.Logf("SUMMARY: processed=%d idempotent_replay=%d failed=%d", processed, idempotentReplay, failed)
+
+	// Log wallet state after all goroutines
+	var postBalance int64
+	var postVersion int64
+	err = pool.QueryRow(context.Background(),
+		`SELECT balance, version FROM wallets WHERE id = $1`, walletID,
+	).Scan(&postBalance, &postVersion)
+	if err != nil {
+		t.Fatalf("post-read wallet: %v", err)
+	}
+	t.Logf("POST-TEST STATE: wallet=%s balance=%d version=%d", walletID, postBalance, postVersion)
+
+	// Log transactions
+	txRows, err := pool.Query(context.Background(),
+		`SELECT id, transaction_type, status, failure_code FROM wager_transactions WHERE provider=$1 AND idempotency_key=$2`,
+		providerID, key,
+	)
+	if err != nil {
+		t.Fatalf("query txs: %v", err)
+	}
+	defer txRows.Close()
+	var txCount int
+	for txRows.Next() {
+		var id, typ, status, fc string
+		txRows.Scan(&id, &typ, &status, &fc)
+		txCount++
+		t.Logf("TX[%d]: id=%s type=%s status=%s failure_code=%s", txCount, id, typ, status, fc)
+	}
+	t.Logf("TOTAL TRANSACTIONS for key: %d", txCount)
+
+	// Log ledger entries
+	var ledgerCount int
+	err = pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id=$1`, walletID,
+	).Scan(&ledgerCount)
+	if err != nil {
+		t.Fatalf("query ledger: %v", err)
+	}
+	t.Logf("TOTAL LEDGER ENTRIES for wallet: %d", ledgerCount)
+
+	// Log outbox events
+	var outboxCount int
+	err = pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM outbox_events WHERE aggregate_id=$1`,
+		walletID,
+	).Scan(&outboxCount)
+	if err != nil {
+		t.Fatalf("query outbox: %v", err)
+	}
+	t.Logf("TOTAL OUTBOX EVENTS for wallet: %d", outboxCount)
+
+	// Final assertion
+	expectedBalance := seedBalance - 500
+	if postBalance != expectedBalance {
+		t.Errorf("BALANCE MISMATCH: got %d, want %d (seed=%d - bet=500)", postBalance, expectedBalance, seedBalance)
+	}
+	if txCount != 1 {
+		t.Errorf("TX COUNT: got %d, want 1", txCount)
+	}
+	if ledgerCount != 1 {
+		t.Errorf("LEDGER COUNT: got %d, want 1", ledgerCount)
 	}
 }
