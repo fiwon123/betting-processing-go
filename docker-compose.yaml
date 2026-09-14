@@ -61,6 +61,20 @@ services:
       postgres:
         condition: service_healthy
 
+  keycloak-init:
+    image: alpine:3.20
+    depends_on:
+      keycloak:
+        condition: service_started
+    restart: "no"
+    environment:
+      KC_URL: http://keycloak:8080
+      KC_ADMIN_USERNAME: ${KC_ADMIN_USERNAME}
+      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+    volumes:
+      - ./scripts/keycloak/setup-test-realm.sh:/scripts/setup-test-realm.sh:ro
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null 2>&1 && /bin/sh /scripts/setup-test-realm.sh"]
+
   sqs-init:
     build:
       context: .
@@ -117,8 +131,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      keycloak:
-        condition: service_started
+      keycloak-init:
+        condition: service_completed_successfully
       ministack:
         condition: service_started
       sqs-init:

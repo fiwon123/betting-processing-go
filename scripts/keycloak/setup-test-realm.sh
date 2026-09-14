@@ -1,6 +1,7 @@
-#!/bin/bash
+#!/bin/sh
 # Keycloak provisioning script for test environment
 # Waits for Keycloak to be ready, then creates realm, client, and test users.
+# Dependencies: curl, jq (installed in the init container)
 
 set -e
 
@@ -29,9 +30,9 @@ ADMIN_TOKEN=$(curl -sf -X POST "${KC_URL}/realms/master/protocol/openid-connect/
   -d "client_id=admin-cli" \
   -d "username=${KC_ADMIN}" \
   -d "password=${KC_ADMIN_PASS}" \
-  -d "grant_type=password" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+  -d "grant_type=password" | jq -r '.access_token')
 
-if [ -z "$ADMIN_TOKEN" ]; then
+if [ -z "$ADMIN_TOKEN" ] || [ "$ADMIN_TOKEN" = "null" ]; then
   echo "Failed to get admin token"
   exit 1
 fi
@@ -104,36 +105,14 @@ echo "Disabling VERIFY_PROFILE for users..."
 for USER in provider1 provider2; do
   USER_ID=$(curl -sf -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     "${KC_URL}/admin/realms/${REALM}/users?username=${USER}" | \
-    python3 -c "import sys,json; users=json.load(sys.stdin); print(users[0]['id'] if users else '')")
+    jq -r '.[0].id // empty')
   
   if [ -n "$USER_ID" ]; then
-    curl -sf -X PUT "${KC_URL}/admin/realms/${REALM}/users/${USER_ID}/execute-actions-email" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -d "[]" > /dev/null 2>&1 || true
-    
-    # Remove any required actions
     curl -sf -X PUT "${KC_URL}/admin/realms/${REALM}/users/${USER_ID}" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "{\"requiredActions\": []}" > /dev/null 2>&1 || true
   fi
 done
-
-# Insert provider_id attributes directly into Keycloak DB
-echo "Setting up provider_id attributes via DB..."
-PGHOST="${KC_DB_HOST:-postgres}" PGPORT="5432" PGUSER="${KC_DB_USER:-keycloak_test}" PGPASSWORD="${KC_DB_PASSWORD:-keycloak_test}" PGDATABASE="${KC_DB:-keycloak_test}" \
-  psql -c "
-    INSERT INTO user_attribute (user_id, name, value)
-    SELECT id, 'provider_id', 'provider1' FROM user_entity WHERE username = 'provider1'
-    ON CONFLICT DO NOTHING;
-  " 2>/dev/null || echo "DB attribute insert skipped (may need direct DB access)"
-
-PGHOST="${KC_DB_HOST:-postgres}" PGPORT="5432" PGUSER="${KC_DB_USER:-keycloak_test}" PGPASSWORD="${KC_DB_PASSWORD:-keycloak_test}" PGDATABASE="${KC_DB:-keycloak_test}" \
-  psql -c "
-    INSERT INTO user_attribute (user_id, name, value)
-    SELECT id, 'provider_id', 'provider2' FROM user_entity WHERE username = 'provider2'
-    ON CONFLICT DO NOTHING;
-  " 2>/dev/null || echo "DB attribute insert skipped (may need direct DB access)"
 
 echo "Keycloak provisioning complete."
