@@ -106,5 +106,6 @@ func (w *ReferenceWorker) processPending(
 		"reference resolved",
 		zap.String("transaction_id", transaction.ID()),
 		zap.String("status", result.Status),
+		zap.Int("ref_attempts", transaction.RefAttempts()+1),
 	)
 }

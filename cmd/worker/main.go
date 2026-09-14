@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	workers "github.com/fiwon123/betting-processing-go/internal/adapters/workers"
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
@@ -104,8 +105,15 @@ func main() {
 						close(done)
 					}()
 
+					shutdownTimeout := 30 * time.Second
+					timer := time.NewTimer(shutdownTimeout)
+					defer timer.Stop()
+
 					select {
 					case <-done:
+						return nil
+					case <-timer.C:
+						log.Warn("worker shutdown timed out, forcing exit")
 						return nil
 					case <-stopCtx.Done():
 						return stopCtx.Err()

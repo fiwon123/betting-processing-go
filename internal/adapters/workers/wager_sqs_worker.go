@@ -133,7 +133,10 @@ func (w *WagerSQSWorker) processMessage(
 		messageID = envelope.MessageID
 	}
 
-	key := buildIdempotencyKey(envelope.Data)
+	key := envelope.Data.IdempotencyKey
+	if key == "" {
+		key = buildIdempotencyKey(envelope.Data)
+	}
 
 	_, err := w.service.ProcessTransaction(
 		ctx,
@@ -152,6 +155,16 @@ func (w *WagerSQSWorker) processMessage(
 			zap.String("message_id", messageID),
 			zap.Error(err),
 		)
+
+		if wagertransaction.IsTerminalBusinessError(err) {
+			if delErr := w.deleteMessage(ctx, message.ReceiptHandle); delErr != nil {
+				w.log.Error(
+					"failed to delete terminal SQS message",
+					zap.String("message_id", messageID),
+					zap.Error(delErr),
+				)
+			}
+		}
 
 		return
 	}
@@ -190,7 +203,10 @@ func (w *WagerSQSWorker) Process(
 		return errors.New("invalid envelope")
 	}
 
-	key := buildIdempotencyKey(envelope.Data)
+	key := envelope.Data.IdempotencyKey
+	if key == "" {
+		key = buildIdempotencyKey(envelope.Data)
+	}
 
 	_, err := w.service.ProcessTransaction(
 		ctx,
