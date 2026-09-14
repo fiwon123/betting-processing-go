@@ -1,5 +1,5 @@
 CREATE TABLE wager_transactions (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     origin VARCHAR(20) NOT NULL DEFAULT 'EXTERNAL',
 

@@ -1,5 +1,5 @@
 CREATE TABLE wallet_ledger_entries (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     wallet_id UUID NOT NULL
         REFERENCES wallets(id),

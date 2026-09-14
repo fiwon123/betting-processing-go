@@ -1,5 +1,5 @@
 CREATE TABLE outbox_events (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     aggregate_type TEXT NOT NULL,
     aggregate_id UUID NOT NULL,
