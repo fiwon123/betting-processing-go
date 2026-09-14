@@ -1,0 +1,32 @@
+package domain
+
+import "errors"
+
+var (
+	ErrInsufficientBalance    = errors.New("insufficient_balance")
+	ErrCurrencyMismatch       = errors.New("currency_mismatch")
+	ErrDuplicateIdempotency   = errors.New("duplicate_idempotency")
+	ErrPayloadConflict        = errors.New("payload_conflict")
+	ErrReferenceNotFound      = errors.New("reference_not_found")
+	ErrReferencePending       = errors.New("reference_pending")
+	ErrReferenceNotSuccessful = errors.New("reference_not_successful")
+	ErrDoubleReversal         = errors.New("double_reversal")
+	ErrWalletNotFound         = errors.New("wallet_not_found")
+	ErrDuplicateWallet        = errors.New("duplicate_wallet")
+	ErrInvalidStateTransition = errors.New("invalid_state_transition")
+	ErrOPENINGRejected        = errors.New("opening_rejected_external")
+	ErrInvalidMoney           = errors.New("invalid_money")
+	ErrInvalidRequest         = errors.New("invalid_request")
+	ErrTransactionNotFound    = errors.New("transaction_not_found")
+	ErrProviderMismatch       = errors.New("provider_mismatch")
+	ErrPlayerMismatch         = errors.New("player_mismatch")
+	ErrWalletMismatch         = errors.New("wallet_mismatch")
+	ErrCurrencyIncompatible   = errors.New("currency_incompatible")
+	ErrRoundMismatch          = errors.New("round_mismatch")
+	ErrReversalValueMismatch  = errors.New("reversal_value_mismatch")
+	ErrBalanceNonNegative     = errors.New("balance_would_be_negative")
+	ErrLedgerImmutability     = errors.New("ledger_entries_are_immutable")
+	ErrZeroAmountRequired     = errors.New("zero_amount_required")
+	ErrPositiveAmountRequired = errors.New("positive_amount_required")
+	ErrMaxRetriesExceeded     = errors.New("max_retries_exceeded")
+)
