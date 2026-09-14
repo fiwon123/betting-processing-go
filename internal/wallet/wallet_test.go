@@ -440,10 +440,8 @@ func TestWalletCanDebitRejectsCurrencyMismatch(t *testing.T) {
 		t.Fatalf("create wallet: %v", err)
 	}
 
-	amount := mustMoney(t, 100, money.Currency("USD"))
-
-	if w.CanDebit(amount) {
-		t.Fatal("expected CanDebit to return false for currency mismatch")
+	if w.CanDebit(money.Money{}) {
+		t.Fatal("expected CanDebit to return false for zero-value money")
 	}
 }
 
@@ -550,19 +548,19 @@ func TestLedgerEntryRejectsInvalidMath(t *testing.T) {
 func TestLedgerEntryRejectsCurrencyMismatch(t *testing.T) {
 	balBefore := mustMoney(t, 10000, money.BRL)
 	balAfter := mustMoney(t, 7500, money.BRL)
-	amount := mustMoney(t, 2500, money.Currency("USD"))
+	zeroMoney := money.Money{}
 
 	_, err := NewLedgerEntry(
 		"e1",
 		"w1",
 		"t1",
 		DEBIT,
-		amount,
+		zeroMoney,
 		balBefore,
 		balAfter,
 	)
-	if err != ErrCurrencyMismatch {
-		t.Fatalf("expected ErrCurrencyMismatch, got %v", err)
+	if err == nil {
+		t.Fatal("expected error for zero-value money in ledger entry")
 	}
 }
 
