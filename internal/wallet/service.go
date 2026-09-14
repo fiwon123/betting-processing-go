@@ -5,33 +5,31 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/money"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Service struct {
 	repo       Repository
 	ledgerRepo LedgerRepository
-	pool       *pgxpool.Pool
+	txFactory  domain.DBTxFactory
 	metrics    *metrics.Metrics
 }
 
 func NewService(
 	repo Repository,
 	ledgerRepo LedgerRepository,
-	pool *pgxpool.Pool,
+	txFactory domain.DBTxFactory,
 	m *metrics.Metrics,
 ) *Service {
 	return &Service{
 		repo:       repo,
 		ledgerRepo: ledgerRepo,
-		pool:       pool,
+		txFactory:  txFactory,
 		metrics:    m,
 	}
 }
@@ -74,38 +72,22 @@ func (s *Service) CreateWallet(
 		return nil, fmt.Errorf("check existing wallet: %w", err)
 	}
 
-	if s.pool == nil {
-		return nil, fmt.Errorf("create wallet: database pool is nil")
+	if s.txFactory == nil {
+		return nil, fmt.Errorf("create wallet: tx factory is nil")
 	}
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	var walletID string
-
-	err = tx.QueryRow(
-		ctx,
-		`
-		INSERT INTO wallets (
-			player_id, provider_id, currency, balance, version, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, 1, now(), now())
-		RETURNING id
-		`,
-		playerID,
-		providerID,
-		string(currency),
-		initialBalance.Amount(),
-	).Scan(&walletID)
+	walletID, err := s.repo.CreateWalletTx(ctx, tx, playerID, providerID, currency, initialBalance)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrDuplicateWallet
 		}
-
-		return nil, fmt.Errorf("insert wallet: %w", err)
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -125,28 +107,9 @@ func (s *Service) CreateWallet(
 	}
 
 	if !initialBalance.IsZero() {
-		var openingID string
-
-		err = tx.QueryRow(
-			ctx,
-			`
-			INSERT INTO wager_transactions (
-				origin, wallet_id, player_id, transaction_type, amount, currency,
-				status, created_at, updated_at, processed_at
-			)
-			VALUES (
-				'INTERNAL', $1, $2, 'OPENING', $3, $4,
-				'PROCESSED', now(), now(), now()
-			)
-			RETURNING id
-			`,
-			walletID,
-			playerID,
-			initialBalance.Amount(),
-			string(currency),
-		).Scan(&openingID)
+		openingID, err := s.repo.CreateOpeningTx(ctx, tx, walletID, playerID, initialBalance, currency)
 		if err != nil {
-			return nil, fmt.Errorf("insert opening transaction: %w", err)
+			return nil, err
 		}
 
 		zeroBalance, err := money.NewMoney(0, currency)
@@ -167,34 +130,9 @@ func (s *Service) CreateWallet(
 			return nil, fmt.Errorf("create ledger entry: %w", err)
 		}
 
-		var entryID string
-
-		err = tx.QueryRow(
-			ctx,
-			`
-			INSERT INTO wallet_ledger_entries (
-				wallet_id,
-				transaction_id,
-				direction,
-				amount,
-				currency,
-				balance_before,
-				balance_after,
-				created_at
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-			RETURNING id
-			`,
-			walletID,
-			openingID,
-			string(entry.Direction()),
-			entry.Amount().Amount(),
-			string(entry.Currency()),
-			entry.BalanceBefore().Amount(),
-			entry.BalanceAfter().Amount(),
-		).Scan(&entryID)
+		_, err = s.repo.CreateLedgerEntryTx(ctx, tx, entry)
 		if err != nil {
-			return nil, fmt.Errorf("insert ledger entry: %w", err)
+			return nil, err
 		}
 
 		events := buildWalletCreatedEvents(w, openingID, entry)
@@ -205,27 +143,9 @@ func (s *Service) CreateWallet(
 				return nil, fmt.Errorf("marshal outbox event: %w", err)
 			}
 
-			_, err = tx.Exec(
-				ctx,
-				`
-				INSERT INTO outbox_events (
-					aggregate_type,
-					aggregate_id,
-					event_type,
-					payload,
-					occurred_at,
-					attempts,
-					next_attempt_at
-				)
-				VALUES ($1, $2, $3, $4, now(), 0, now())
-				`,
-				event.AggregateType,
-				event.AggregateID,
-				event.EventType,
-				payload,
-			)
+			err = s.repo.CreateOutboxEventTx(ctx, tx, event.AggregateType, event.AggregateID, event.EventType, payload)
 			if err != nil {
-				return nil, fmt.Errorf("insert outbox event: %w", err)
+				return nil, err
 			}
 		}
 	}
@@ -272,7 +192,7 @@ func (s *Service) GetLedger(
 
 func (s *Service) Debit(
 	ctx context.Context,
-	dbTx pgx.Tx,
+	dbTx domain.DBTx,
 	walletID string,
 	amount money.Money,
 ) (
@@ -292,7 +212,7 @@ func (s *Service) Debit(
 
 func (s *Service) Credit(
 	ctx context.Context,
-	dbTx pgx.Tx,
+	dbTx domain.DBTx,
 	walletID string,
 	amount money.Money,
 ) (
@@ -312,7 +232,7 @@ func (s *Service) Credit(
 
 func (s *Service) applyBalanceChange(
 	ctx context.Context,
-	dbTx pgx.Tx,
+	dbTx domain.DBTx,
 	walletID string,
 	amount money.Money,
 	direction Direction,
@@ -330,16 +250,16 @@ func (s *Service) applyBalanceChange(
 		return money.Money{}, money.Money{}, 0, ErrInvalidLedgerEntry
 	}
 
-	if s.pool == nil && dbTx == nil {
+	if s.txFactory == nil && dbTx == nil {
 		return money.Money{}, money.Money{}, 0,
-			fmt.Errorf("change wallet balance: database pool is nil")
+			fmt.Errorf("change wallet balance: tx factory is nil")
 	}
 
 	tx := dbTx
 	ownsTransaction := false
 
 	if tx == nil {
-		tx, err = s.pool.Begin(ctx)
+		tx, err = s.txFactory.Begin(ctx)
 		if err != nil {
 			return money.Money{}, money.Money{}, 0,
 				fmt.Errorf("begin balance transaction: %w", err)
@@ -349,75 +269,10 @@ func (s *Service) applyBalanceChange(
 		defer tx.Rollback(ctx)
 	}
 
-	var (
-		idVal       string
-		playerID    string
-		providerID  string
-		currencyStr string
-		balance     int64
-		version     int64
-		createdAt   time.Time
-		updatedAt   time.Time
-	)
-
-	err = tx.QueryRow(
-		ctx,
-		`
-		SELECT
-			id,
-			player_id,
-			provider_id,
-			currency,
-			balance,
-			version,
-			created_at,
-			updated_at
-		FROM wallets
-		WHERE id = $1
-		FOR UPDATE
-		`,
-		walletID,
-	).Scan(
-		&idVal,
-		&playerID,
-		&providerID,
-		&currencyStr,
-		&balance,
-		&version,
-		&createdAt,
-		&updatedAt,
-	)
+	w, err := s.repo.FindByIDForUpdate(ctx, tx, walletID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return money.Money{}, money.Money{}, 0,
-				ErrWalletNotFound
-		}
-
 		return money.Money{}, money.Money{}, 0,
 			fmt.Errorf("load wallet for balance change: %w", err)
-	}
-
-	currency := money.Currency(currencyStr)
-
-	currentBalance, err := money.NewMoney(balance, currency)
-	if err != nil {
-		return money.Money{}, money.Money{}, 0,
-			fmt.Errorf("parse wallet balance: %w", err)
-	}
-
-	w, err := RehydrateWallet(
-		idVal,
-		playerID,
-		providerID,
-		currency,
-		currentBalance,
-		version,
-		createdAt,
-		updatedAt,
-	)
-	if err != nil {
-		return money.Money{}, money.Money{}, 0,
-			fmt.Errorf("rehydrate wallet: %w", err)
 	}
 
 	var change *BalanceChange
@@ -432,31 +287,13 @@ func (s *Service) applyBalanceChange(
 		return money.Money{}, money.Money{}, 0, err
 	}
 
-	commandTag, err := tx.Exec(
-		ctx,
-		`
-		UPDATE wallets
-		SET
-			balance = $1,
-			version = $2,
-			updated_at = now()
-		WHERE id = $3
-		  AND version = $4
-		`,
-		change.BalanceAfter.Amount(),
-		change.NewVersion,
-		idVal,
-		version,
-	)
+	newVersion, err := s.repo.UpdateBalanceTx(ctx, tx, w.ID(), change.BalanceAfter, w.Version())
 	if err != nil {
 		return money.Money{}, money.Money{}, 0,
 			fmt.Errorf("update wallet balance: %w", err)
 	}
 
-	if commandTag.RowsAffected() == 0 {
-		return money.Money{}, money.Money{}, 0,
-			ErrConcurrentUpdate
-	}
+	_ = newVersion
 
 	if ownsTransaction {
 		if err := tx.Commit(ctx); err != nil {
@@ -590,7 +427,6 @@ func buildWalletCreatedEvents(
 }
 
 func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint")
 }

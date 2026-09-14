@@ -3,7 +3,7 @@ package wagertransaction
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 )
 
 type Repository interface {
@@ -16,6 +16,11 @@ type Repository interface {
 	FindPendingReferences(ctx context.Context, limit int) ([]*Transaction, error)
 	HasSuccessfulReversal(ctx context.Context, referenceID string) (bool, error)
 	IncrementRefAttempts(ctx context.Context, id string) error
+
+	CreateTransactionTx(ctx context.Context, tx domain.DBTx, t *Transaction) (string, error)
+	UpdateStatusTx(ctx context.Context, tx domain.DBTx, id string, status TransactionStatus, failureCode string) error
+	CreateOutboxEventTx(ctx context.Context, tx domain.DBTx, aggregateType string, aggregateID string, eventType string, payload []byte) error
+	CreateWalletLedgerEntryTx(ctx context.Context, tx domain.DBTx, walletID string, transactionID string, direction string, amount int64, currency string, balanceBefore int64, balanceAfter int64) (string, error)
 }
 
 type LedgerEntry interface {
@@ -25,9 +30,9 @@ type LedgerEntry interface {
 
 type InboxRepository interface {
 	RecordReceived(ctx context.Context, consumerName, messageID, payloadHash string) (bool, error)
-	RecordReceivedTx(ctx context.Context, dbTx pgx.Tx, consumerName, messageID, payloadHash string) (bool, error)
+	RecordReceivedTx(ctx context.Context, dbTx domain.DBTx, consumerName, messageID, payloadHash string) (bool, error)
 	MarkCompleted(ctx context.Context, consumerName, messageID string) error
-	MarkCompletedTx(ctx context.Context, dbTx pgx.Tx, consumerName, messageID string) error
+	MarkCompletedTx(ctx context.Context, dbTx domain.DBTx, consumerName, messageID string) error
 }
 
 type OutboxRepository interface {

@@ -6,8 +6,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/money"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -245,6 +245,68 @@ func (r *testRepo) IncrementRefAttempts(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *testRepo) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *Transaction) (string, error) {
+	var txID string
+	err := dbTx.QueryRow(ctx,
+		`INSERT INTO wager_transactions
+		 (origin, external_id, provider, idempotency_key, payload_hash,
+		  wallet_id, player_id, round_id, game_id,
+		  transaction_type, amount, currency,
+		  external_reference, internal_reference,
+		  status, failure_code, result_balance, created_at, updated_at, processed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		 RETURNING id`,
+		string(t.Origin()), t.ExternalID(), t.Provider(),
+		t.IdempotencyKey(), t.PayloadHash(),
+		t.WalletID(), t.PlayerID(), t.RoundID(), t.GameID(),
+		string(t.TransactionType()), t.Amount().Amount(), string(t.Amount().Currency()),
+		t.ExternalReference(), t.InternalReference(),
+		string(t.Status()), t.FailureCode(), nil, t.CreatedAt(), t.UpdatedAt(), t.ProcessedAt(),
+	).Scan(&txID)
+	if err != nil {
+		return "", err
+	}
+	return txID, nil
+}
+
+func (r *testRepo) UpdateStatusTx(ctx context.Context, dbTx domain.DBTx, id string, status TransactionStatus, failureCode string) error {
+	var fc *string
+	if failureCode != "" {
+		fc = &failureCode
+	}
+	_, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions
+		 SET status = $1, failure_code = $2, updated_at = now()
+		 WHERE id = $3`,
+		string(status), fc, id,
+	)
+	return err
+}
+
+func (r *testRepo) CreateOutboxEventTx(ctx context.Context, dbTx domain.DBTx, aggregateType string, aggregateID string, eventType string, payload []byte) error {
+	_, err := dbTx.Exec(ctx,
+		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
+		 VALUES ($1, $2, $3, $4, now(), 0, now())`,
+		aggregateType, aggregateID, eventType, payload,
+	)
+	return err
+}
+
+func (r *testRepo) CreateWalletLedgerEntryTx(ctx context.Context, dbTx domain.DBTx, walletID string, transactionID string, direction string, amount int64, currency string, balanceBefore int64, balanceAfter int64) (string, error) {
+	var entryID string
+	err := dbTx.QueryRow(ctx,
+		`INSERT INTO wallet_ledger_entries
+		 (wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		 RETURNING id`,
+		walletID, transactionID, direction, amount, currency, balanceBefore, balanceAfter,
+	).Scan(&entryID)
+	if err != nil {
+		return "", err
+	}
+	return entryID, nil
+}
+
 func newTestRepo(pool *pgxpool.Pool) *testRepo {
 	return &testRepo{pool: pool}
 }
@@ -253,7 +315,7 @@ type testWalletSvc struct {
 	pool *pgxpool.Pool
 }
 
-func (w *testWalletSvc) Debit(ctx context.Context, dbTx pgx.Tx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
+func (w *testWalletSvc) Debit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
 	var balance int64
 	var version int64
 	err := w.pool.QueryRow(ctx,
@@ -278,7 +340,7 @@ func (w *testWalletSvc) Debit(ctx context.Context, dbTx pgx.Tx, walletID string,
 	return balBefore, balAfter, version + 1, nil
 }
 
-func (w *testWalletSvc) Credit(ctx context.Context, dbTx pgx.Tx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
+func (w *testWalletSvc) Credit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (money.Money, money.Money, int64, error) {
 	var balance int64
 	var version int64
 	err := w.pool.QueryRow(ctx,
@@ -310,12 +372,12 @@ func (r *testInboxRepo) RecordReceived(_ context.Context, _, _, _ string) (bool,
 	return true, nil
 }
 
-func (r *testInboxRepo) RecordReceivedTx(_ context.Context, _ pgx.Tx, _, _, _ string) (bool, error) {
+func (r *testInboxRepo) RecordReceivedTx(_ context.Context, _ domain.DBTx, _, _, _ string) (bool, error) {
 	return true, nil
 }
 
 func (r *testInboxRepo) MarkCompleted(_ context.Context, _, _ string) error { return nil }
-func (r *testInboxRepo) MarkCompletedTx(_ context.Context, _ pgx.Tx, _, _ string) error {
+func (r *testInboxRepo) MarkCompletedTx(_ context.Context, _ domain.DBTx, _, _ string) error {
 	return nil
 }
 

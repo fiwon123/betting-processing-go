@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/money"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,7 +48,8 @@ func createTestService(t *testing.T, pool *pgxpool.Pool) *wagertransaction.Servi
 	walletSvc := newTestWalletSvc(pool)
 	inboxRepo := newTestInboxRepo(pool)
 	outboxRepo := newTestOutboxRepo(pool)
-	return wagertransaction.NewService(repo, inboxRepo, outboxRepo, walletSvc, pool, nil)
+	txManager := db.NewTxManager(pool)
+	return wagertransaction.NewService(repo, inboxRepo, outboxRepo, walletSvc, txManager, nil)
 }
 
 func TestConcurrency_DoubleDebit(t *testing.T) {

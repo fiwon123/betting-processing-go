@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/money"
 	"github.com/fiwon123/betting-processing-go/internal/wallet"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -20,8 +19,8 @@ const (
 )
 
 type WalletService interface {
-	Debit(ctx context.Context, dbTx pgx.Tx, walletID string, amount money.Money) (balanceBefore money.Money, balanceAfter money.Money, walletVersion int64, err error)
-	Credit(ctx context.Context, dbTx pgx.Tx, walletID string, amount money.Money) (balanceBefore money.Money, balanceAfter money.Money, walletVersion int64, err error)
+	Debit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (balanceBefore money.Money, balanceAfter money.Money, walletVersion int64, err error)
+	Credit(ctx context.Context, dbTx domain.DBTx, walletID string, amount money.Money) (balanceBefore money.Money, balanceAfter money.Money, walletVersion int64, err error)
 }
 
 type Service struct {
@@ -29,7 +28,7 @@ type Service struct {
 	inboxRepo  InboxRepository
 	outboxRepo OutboxRepository
 	walletSvc  WalletService
-	pool       *pgxpool.Pool
+	txFactory  domain.DBTxFactory
 	metrics    *metrics.Metrics
 }
 
@@ -38,7 +37,7 @@ func NewService(
 	inboxRepo InboxRepository,
 	outboxRepo OutboxRepository,
 	walletSvc WalletService,
-	pool *pgxpool.Pool,
+	txFactory domain.DBTxFactory,
 	m *metrics.Metrics,
 ) *Service {
 	return &Service{
@@ -46,7 +45,7 @@ func NewService(
 		inboxRepo:  inboxRepo,
 		outboxRepo: outboxRepo,
 		walletSvc:  walletSvc,
-		pool:       pool,
+		txFactory:  txFactory,
 		metrics:    m,
 	}
 }
@@ -177,7 +176,7 @@ func (s *Service) handleReplay(ctx context.Context, existing *Transaction) (*Pro
 }
 
 func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.Money, messageID string) (*ProcessResult, error) {
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin bet transaction: %w", err)
 	}
@@ -213,7 +212,7 @@ func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.
 }
 
 func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.Money, messageID string) (*ProcessResult, error) {
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin win transaction: %w", err)
 	}
@@ -251,7 +250,7 @@ func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.
 func (s *Service) processLoss(ctx context.Context, tx *Transaction, messageID string) (*ProcessResult, error) {
 	tx.TransitionTo(PROCESSED)
 
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin loss transaction: %w", err)
 	}
@@ -263,23 +262,7 @@ func (s *Service) processLoss(ctx context.Context, tx *Transaction, messageID st
 		}
 	}
 
-	var txID string
-	err = dbTx.QueryRow(ctx,
-		`INSERT INTO wager_transactions
-		 (origin, external_id, provider, idempotency_key, payload_hash,
-		  wallet_id, player_id, round_id, game_id,
-		  transaction_type, amount, currency,
-		  external_reference, internal_reference,
-		  status, failure_code, created_at, updated_at, processed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-		 RETURNING id`,
-		string(tx.Origin()), nullString(tx.ExternalID()), nullString(tx.Provider()),
-		nullString(tx.IdempotencyKey()), nullString(tx.PayloadHash()),
-		tx.WalletID(), tx.PlayerID(), nullString(tx.RoundID()), nullString(tx.GameID()),
-		string(tx.TransactionType()), tx.Amount().Amount(), string(tx.Amount().Currency()),
-		nullString(tx.ExternalReference()), nullString(tx.InternalReference()),
-		string(tx.Status()), nullString(tx.FailureCode()), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
-	).Scan(&txID)
+	txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("insert loss transaction: %w", err)
 	}
@@ -304,11 +287,7 @@ func (s *Service) processLoss(ctx context.Context, tx *Transaction, messageID st
 		},
 	}
 	payload, _ := json.Marshal(processedEvent)
-	_, err = dbTx.Exec(ctx,
-		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-		 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
-		processedEvent.AggregateType, processedEvent.AggregateID, processedEvent.EventType, payload, processedEvent.OccurredAt,
-	)
+	err = s.repo.CreateOutboxEventTx(ctx, dbTx, processedEvent.AggregateType, processedEvent.AggregateID, processedEvent.EventType, payload)
 	if err != nil {
 		return nil, fmt.Errorf("insert processed outbox event: %w", err)
 	}
@@ -354,29 +333,13 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 		if ref.Status() == PENDING || ref.Status() == PENDING_REFERENCE {
 			tx.TransitionTo(PENDING_REFERENCE)
 
-			dbTx, err := s.pool.Begin(ctx)
+			dbTx, err := s.txFactory.Begin(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("begin pending-ref transaction: %w", err)
 			}
 			defer dbTx.Rollback(ctx)
 
-			var txID string
-			err = dbTx.QueryRow(ctx,
-				`INSERT INTO wager_transactions
-				 (origin, external_id, provider, idempotency_key, payload_hash,
-				  wallet_id, player_id, round_id, game_id,
-				  transaction_type, amount, currency,
-				  external_reference, internal_reference,
-				  status, failure_code, created_at, updated_at, processed_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-				 RETURNING id`,
-				string(tx.Origin()), nullString(tx.ExternalID()), nullString(tx.Provider()),
-				nullString(tx.IdempotencyKey()), nullString(tx.PayloadHash()),
-				tx.WalletID(), tx.PlayerID(), nullString(tx.RoundID()), nullString(tx.GameID()),
-				string(tx.TransactionType()), tx.Amount().Amount(), string(tx.Amount().Currency()),
-				nullString(tx.ExternalReference()), nullString(tx.InternalReference()),
-				string(tx.Status()), nullString(tx.FailureCode()), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
-			).Scan(&txID)
+			txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 			if err != nil {
 				return nil, fmt.Errorf("insert pending-ref transaction: %w", err)
 			}
@@ -401,11 +364,7 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 				},
 			}
 			payload, _ := json.Marshal(pendingEvent)
-			_, err = dbTx.Exec(ctx,
-				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-				 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
-				pendingEvent.AggregateType, pendingEvent.AggregateID, pendingEvent.EventType, payload, pendingEvent.OccurredAt,
-			)
+			err = s.repo.CreateOutboxEventTx(ctx, dbTx, pendingEvent.AggregateType, pendingEvent.AggregateID, pendingEvent.EventType, payload)
 			if err != nil {
 				return nil, fmt.Errorf("insert pending-ref outbox event: %w", err)
 			}
@@ -431,7 +390,7 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 		return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 	}
 
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin refund transaction: %w", err)
 	}
@@ -476,29 +435,13 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 		if ref.Status() == PENDING || ref.Status() == PENDING_REFERENCE {
 			tx.TransitionTo(PENDING_REFERENCE)
 
-			dbTx, err := s.pool.Begin(ctx)
+			dbTx, err := s.txFactory.Begin(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("begin pending-ref transaction: %w", err)
 			}
 			defer dbTx.Rollback(ctx)
 
-			var txID string
-			err = dbTx.QueryRow(ctx,
-				`INSERT INTO wager_transactions
-				 (origin, external_id, provider, idempotency_key, payload_hash,
-				  wallet_id, player_id, round_id, game_id,
-				  transaction_type, amount, currency,
-				  external_reference, internal_reference,
-				  status, failure_code, created_at, updated_at, processed_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-				 RETURNING id`,
-				string(tx.Origin()), nullString(tx.ExternalID()), nullString(tx.Provider()),
-				nullString(tx.IdempotencyKey()), nullString(tx.PayloadHash()),
-				tx.WalletID(), tx.PlayerID(), nullString(tx.RoundID()), nullString(tx.GameID()),
-				string(tx.TransactionType()), tx.Amount().Amount(), string(tx.Amount().Currency()),
-				nullString(tx.ExternalReference()), nullString(tx.InternalReference()),
-				string(tx.Status()), nullString(tx.FailureCode()), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
-			).Scan(&txID)
+			txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 			if err != nil {
 				return nil, fmt.Errorf("insert pending-ref transaction: %w", err)
 			}
@@ -523,11 +466,7 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 				},
 			}
 			payload, _ := json.Marshal(pendingEvent)
-			_, err = dbTx.Exec(ctx,
-				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-				 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
-				pendingEvent.AggregateType, pendingEvent.AggregateID, pendingEvent.EventType, payload, pendingEvent.OccurredAt,
-			)
+			err = s.repo.CreateOutboxEventTx(ctx, dbTx, pendingEvent.AggregateType, pendingEvent.AggregateID, pendingEvent.EventType, payload)
 			if err != nil {
 				return nil, fmt.Errorf("insert pending-ref outbox event: %w", err)
 			}
@@ -553,7 +492,7 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 		return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 	}
 
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin rollback transaction: %w", err)
 	}
@@ -644,7 +583,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 			return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 		}
 
-		dbTx, err := s.pool.Begin(ctx)
+		dbTx, err := s.txFactory.Begin(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("begin resolve-ref transaction: %w", err)
 		}
@@ -678,16 +617,13 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 			failureCode := mapWalletErrorForReversal(err)
 			tx.SetFailureCode(failureCode)
 
-			rejectTx, err := s.pool.Begin(ctx)
+			rejectTx, err := s.txFactory.Begin(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("begin reject update: %w", err)
 			}
 			defer rejectTx.Rollback(ctx)
 
-			_, err = rejectTx.Exec(ctx,
-				`UPDATE wager_transactions SET status = $1, failure_code = $2, updated_at = now(), processed_at = now() WHERE id = $3`,
-				string(REJECTED), nullString(failureCode), tx.ID(),
-			)
+			err = s.repo.UpdateStatusTx(ctx, rejectTx, tx.ID(), REJECTED, failureCode)
 			if err != nil {
 				return nil, fmt.Errorf("update rejected status: %w", err)
 			}
@@ -712,11 +648,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 				},
 			}
 			payload, _ := json.Marshal(rejectedEvent)
-			_, err = rejectTx.Exec(ctx,
-				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-				 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
-				rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload, rejectedEvent.OccurredAt,
-			)
+			err = s.repo.CreateOutboxEventTx(ctx, rejectTx, rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload)
 			if err != nil {
 				return nil, fmt.Errorf("insert rejected outbox event: %w", err)
 			}
@@ -744,29 +676,13 @@ func (s *Service) createAndReject(ctx context.Context, tx *Transaction, failureC
 	tx.SetFailureCode(failureCode)
 	tx.TransitionTo(REJECTED)
 
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin create-reject transaction: %w", err)
 	}
 	defer dbTx.Rollback(ctx)
 
-	var txID string
-	err = dbTx.QueryRow(ctx,
-		`INSERT INTO wager_transactions
-		 (origin, external_id, provider, idempotency_key, payload_hash,
-		  wallet_id, player_id, round_id, game_id,
-		  transaction_type, amount, currency,
-		  external_reference, internal_reference,
-		  status, failure_code, created_at, updated_at, processed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-		 RETURNING id`,
-		string(tx.Origin()), nullString(tx.ExternalID()), nullString(tx.Provider()),
-		nullString(tx.IdempotencyKey()), nullString(tx.PayloadHash()),
-		tx.WalletID(), tx.PlayerID(), nullString(tx.RoundID()), nullString(tx.GameID()),
-		string(tx.TransactionType()), tx.Amount().Amount(), string(tx.Amount().Currency()),
-		nullString(tx.ExternalReference()), nullString(tx.InternalReference()),
-		string(tx.Status()), nullString(tx.FailureCode()), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
-	).Scan(&txID)
+	txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 	if err != nil {
 		return fmt.Errorf("insert rejected transaction: %w", err)
 	}
@@ -792,11 +708,7 @@ func (s *Service) createAndReject(ctx context.Context, tx *Transaction, failureC
 		},
 	}
 	payload, _ := json.Marshal(rejectedEvent)
-	_, err = dbTx.Exec(ctx,
-		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-		 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
-		rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload, rejectedEvent.OccurredAt,
-	)
+	err = s.repo.CreateOutboxEventTx(ctx, dbTx, rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload)
 	if err != nil {
 		return fmt.Errorf("insert rejected outbox event: %w", err)
 	}
@@ -808,29 +720,13 @@ func (s *Service) reject(ctx context.Context, tx *Transaction, failureCode strin
 	tx.SetFailureCode(failureCode)
 	tx.TransitionTo(REJECTED)
 
-	dbTx, err := s.pool.Begin(ctx)
+	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin reject transaction: %w", err)
 	}
 	defer dbTx.Rollback(ctx)
 
-	var txID string
-	err = dbTx.QueryRow(ctx,
-		`INSERT INTO wager_transactions
-		 (origin, external_id, provider, idempotency_key, payload_hash,
-		  wallet_id, player_id, round_id, game_id,
-		  transaction_type, amount, currency,
-		  external_reference, internal_reference,
-		  status, failure_code, created_at, updated_at, processed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-		 RETURNING id`,
-		string(tx.Origin()), nullString(tx.ExternalID()), nullString(tx.Provider()),
-		nullString(tx.IdempotencyKey()), nullString(tx.PayloadHash()),
-		tx.WalletID(), tx.PlayerID(), nullString(tx.RoundID()), nullString(tx.GameID()),
-		string(tx.TransactionType()), tx.Amount().Amount(), string(tx.Amount().Currency()),
-		nullString(tx.ExternalReference()), nullString(tx.InternalReference()),
-		string(tx.Status()), nullString(tx.FailureCode()), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
-	).Scan(&txID)
+	txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("insert rejected transaction: %w", err)
 	}
@@ -856,11 +752,7 @@ func (s *Service) reject(ctx context.Context, tx *Transaction, failureCode strin
 		},
 	}
 	payload, _ := json.Marshal(rejectedEvent)
-	_, err = dbTx.Exec(ctx,
-		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-		 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
-		rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload, rejectedEvent.OccurredAt,
-	)
+	err = s.repo.CreateOutboxEventTx(ctx, dbTx, rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload)
 	if err != nil {
 		return nil, fmt.Errorf("insert rejected outbox event: %w", err)
 	}
@@ -877,7 +769,7 @@ func (s *Service) reject(ctx context.Context, tx *Transaction, failureCode strin
 	}, nil
 }
 
-func (s *Service) commitWithLedger(ctx context.Context, dbTx pgx.Tx, tx *Transaction, dir domain.Direction, amount money.Money, balBefore, balAfter money.Money, walletVersion int64, messageID string) error {
+func (s *Service) commitWithLedger(ctx context.Context, dbTx domain.DBTx, tx *Transaction, dir domain.Direction, amount money.Money, balBefore, balAfter money.Money, walletVersion int64, messageID string) error {
 
 	if messageID != "" {
 		if _, err := s.inboxRepo.RecordReceivedTx(ctx, dbTx, consumerName, messageID, ""); err != nil {
@@ -887,23 +779,7 @@ func (s *Service) commitWithLedger(ctx context.Context, dbTx pgx.Tx, tx *Transac
 
 	tx.TransitionTo(PROCESSED)
 
-	var txID string
-	err := dbTx.QueryRow(ctx,
-		`INSERT INTO wager_transactions
-		 (origin, external_id, provider, idempotency_key, payload_hash,
-		  wallet_id, player_id, round_id, game_id,
-		  transaction_type, amount, currency,
-		  external_reference, internal_reference,
-		  status, failure_code, result_balance, created_at, updated_at, processed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-		 RETURNING id`,
-		string(tx.Origin()), nullString(tx.ExternalID()), nullString(tx.Provider()),
-		nullString(tx.IdempotencyKey()), nullString(tx.PayloadHash()),
-		tx.WalletID(), tx.PlayerID(), nullString(tx.RoundID()), nullString(tx.GameID()),
-		string(tx.TransactionType()), tx.Amount().Amount(), string(tx.Amount().Currency()),
-		nullString(tx.ExternalReference()), nullString(tx.InternalReference()),
-		string(tx.Status()), nullString(tx.FailureCode()), balAfter.Amount(), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
-	).Scan(&txID)
+	txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 	if err != nil {
 		if isUniqueViolation(err) {
 			existing, findErr := s.repo.FindByIdempotencyKey(ctx, tx.Provider(), tx.IdempotencyKey())
@@ -916,15 +792,10 @@ func (s *Service) commitWithLedger(ctx context.Context, dbTx pgx.Tx, tx *Transac
 	}
 	tx.SetID(txID)
 
-	var entryID string
-	err = dbTx.QueryRow(ctx,
-		`INSERT INTO wallet_ledger_entries
-		 (wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-		 RETURNING id`,
+	_, err = s.repo.CreateWalletLedgerEntryTx(ctx, dbTx,
 		tx.WalletID(), txID, string(dir), amount.Amount(), string(amount.Currency()),
 		balBefore.Amount(), balAfter.Amount(),
-	).Scan(&entryID)
+	)
 	if err != nil {
 		return fmt.Errorf("insert ledger entry: %w", err)
 	}
@@ -932,11 +803,7 @@ func (s *Service) commitWithLedger(ctx context.Context, dbTx pgx.Tx, tx *Transac
 	events := buildTransactionEvents(tx, dir, amount, balBefore, balAfter, walletVersion)
 	for _, ev := range events {
 		payload, _ := json.Marshal(ev)
-		_, err = dbTx.Exec(ctx,
-			`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
-			 VALUES ($1, $2, $3, $4, now(), 0, now())`,
-			ev.AggregateType, ev.AggregateID, ev.EventType, payload,
-		)
+		err = s.repo.CreateOutboxEventTx(ctx, dbTx, ev.AggregateType, ev.AggregateID, ev.EventType, payload)
 		if err != nil {
 			return fmt.Errorf("insert outbox event: %w", err)
 		}
@@ -953,13 +820,11 @@ func (s *Service) commitWithLedger(ctx context.Context, dbTx pgx.Tx, tx *Transac
 }
 
 func (s *Service) getWalletBalance(ctx context.Context, walletID string) (money.Money, error) {
-	row := s.pool.QueryRow(ctx, `SELECT balance, currency FROM wallets WHERE id = $1`, walletID)
-	var balance int64
-	var currency string
-	if err := row.Scan(&balance, &currency); err != nil {
+	w, err := s.repo.FindByID(ctx, walletID)
+	if err != nil {
 		return money.Money{}, fmt.Errorf("get wallet balance: %w", err)
 	}
-	return money.NewMoney(balance, money.Currency(currency))
+	return w.Amount(), nil
 }
 
 func (s *Service) result(tx *Transaction, balance money.Money) (*ProcessResult, error) {
@@ -1109,4 +974,9 @@ type Request struct {
 type MoneyDTO struct {
 	Amount   string
 	Currency string
+}
+
+func isUniqueViolation(err error) bool {
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "unique constraint")
 }

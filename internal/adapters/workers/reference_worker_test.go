@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
-	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -44,18 +44,31 @@ func (r *stubRefRepo) HasSuccessfulReversal(_ context.Context, _ string) (bool, 
 
 func (r *stubRefRepo) IncrementRefAttempts(_ context.Context, _ string) error { return nil }
 
+func (r *stubRefRepo) CreateTransactionTx(_ context.Context, _ domain.DBTx, _ *wagertransaction.Transaction) (string, error) {
+	return "", nil
+}
+func (r *stubRefRepo) UpdateStatusTx(_ context.Context, _ domain.DBTx, _ string, _ wagertransaction.TransactionStatus, _ string) error {
+	return nil
+}
+func (r *stubRefRepo) CreateOutboxEventTx(_ context.Context, _ domain.DBTx, _ string, _ string, _ string, _ []byte) error {
+	return nil
+}
+func (r *stubRefRepo) CreateWalletLedgerEntryTx(_ context.Context, _ domain.DBTx, _ string, _ string, _ string, _ int64, _ string, _ int64, _ int64) (string, error) {
+	return "", nil
+}
+
 type stubInboxRepoRef struct{}
 
 func (r *stubInboxRepoRef) RecordReceived(_ context.Context, _, _, _ string) (bool, error) {
 	return true, nil
 }
 
-func (r *stubInboxRepoRef) RecordReceivedTx(_ context.Context, _ pgx.Tx, _, _, _ string) (bool, error) {
+func (r *stubInboxRepoRef) RecordReceivedTx(_ context.Context, _ domain.DBTx, _, _, _ string) (bool, error) {
 	return true, nil
 }
 
 func (r *stubInboxRepoRef) MarkCompleted(_ context.Context, _, _ string) error { return nil }
-func (r *stubInboxRepoRef) MarkCompletedTx(_ context.Context, _ pgx.Tx, _, _ string) error {
+func (r *stubInboxRepoRef) MarkCompletedTx(_ context.Context, _ domain.DBTx, _, _ string) error {
 	return nil
 }
 

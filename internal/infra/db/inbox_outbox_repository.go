@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,7 +44,7 @@ func (r *InboxRepository) MarkCompleted(ctx context.Context, consumerName, messa
 	return nil
 }
 
-func (r *InboxRepository) RecordReceivedTx(ctx context.Context, dbTx pgx.Tx, consumerName, messageID, payloadHash string) (bool, error) {
+func (r *InboxRepository) RecordReceivedTx(ctx context.Context, dbTx domain.DBTx, consumerName, messageID, payloadHash string) (bool, error) {
 	tag, err := dbTx.Exec(ctx,
 		`INSERT INTO inbox_messages (consumer_name, message_id, payload_hash, received_at)
 		 VALUES ($1, $2, $3, now())
@@ -57,7 +57,7 @@ func (r *InboxRepository) RecordReceivedTx(ctx context.Context, dbTx pgx.Tx, con
 	return tag.RowsAffected() > 0, nil
 }
 
-func (r *InboxRepository) MarkCompletedTx(ctx context.Context, dbTx pgx.Tx, consumerName, messageID string) error {
+func (r *InboxRepository) MarkCompletedTx(ctx context.Context, dbTx domain.DBTx, consumerName, messageID string) error {
 	_, err := dbTx.Exec(ctx,
 		`UPDATE inbox_messages
 		 SET completed_at = now()

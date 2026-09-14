@@ -2,8 +2,6 @@ package wagertransaction
 
 import (
 	"errors"
-
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
@@ -58,10 +56,5 @@ func IsTerminalBusinessError(err error) bool {
 		errors.Is(err, ErrRoundMismatch) ||
 		errors.Is(err, ErrReversalValueMismatch) ||
 		errors.Is(err, ErrInvalidStateTransition) ||
-		errors.Is(err, ErrIdempotentDuplicate)
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+		errors.Is(err, 		ErrIdempotentDuplicate)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/money"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/jackc/pgx/v5"
@@ -179,6 +180,87 @@ func (r *WagerTransactionRepository) IncrementRefAttempts(ctx context.Context, i
 		return fmt.Errorf("increment ref attempts: %w", err)
 	}
 	return nil
+}
+
+func (r *WagerTransactionRepository) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *wagertransaction.Transaction) (string, error) {
+	var txID string
+	var rbAmount *int64
+	if rb := t.ResultBalance(); rb != nil {
+		v := rb.Amount()
+		rbAmount = &v
+	}
+	err := dbTx.QueryRow(ctx,
+		`INSERT INTO wager_transactions
+		 (origin, external_id, provider, idempotency_key, payload_hash,
+		  wallet_id, player_id, round_id, game_id,
+		  transaction_type, amount, currency,
+		  external_reference, internal_reference,
+		  status, failure_code, result_balance, created_at, updated_at, processed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		 RETURNING id`,
+		string(t.Origin()), nullString(t.ExternalID()), nullString(t.Provider()),
+		nullString(t.IdempotencyKey()), nullString(t.PayloadHash()),
+		t.WalletID(), t.PlayerID(), nullString(t.RoundID()), nullString(t.GameID()),
+		string(t.TransactionType()), t.Amount().Amount(), string(t.Amount().Currency()),
+		nullString(t.ExternalReference()), nullString(t.InternalReference()),
+		string(t.Status()), nullString(t.FailureCode()), rbAmount, t.CreatedAt(), t.UpdatedAt(), t.ProcessedAt(),
+	).Scan(&txID)
+	if err != nil {
+		return "", fmt.Errorf("insert transaction: %w", err)
+	}
+	return txID, nil
+}
+
+func (r *WagerTransactionRepository) UpdateStatusTx(ctx context.Context, dbTx domain.DBTx, id string, status wagertransaction.TransactionStatus, failureCode string) error {
+	var fc *string
+	if failureCode != "" {
+		fc = &failureCode
+	}
+	_, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions
+		 SET status = $1, failure_code = $2, updated_at = now(),
+		     processed_at = CASE WHEN $1 = 'PROCESSED' THEN now() ELSE processed_at END
+		 WHERE id = $3`,
+		string(status), fc, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update transaction status: %w", err)
+	}
+	return nil
+}
+
+func (r *WagerTransactionRepository) CreateOutboxEventTx(ctx context.Context, dbTx domain.DBTx, aggregateType string, aggregateID string, eventType string, payload []byte) error {
+	_, err := dbTx.Exec(ctx,
+		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
+		 VALUES ($1, $2, $3, $4, now(), 0, now())`,
+		aggregateType, aggregateID, eventType, payload,
+	)
+	if err != nil {
+		return fmt.Errorf("insert outbox event: %w", err)
+	}
+	return nil
+}
+
+func (r *WagerTransactionRepository) CreateWalletLedgerEntryTx(ctx context.Context, dbTx domain.DBTx, walletID string, transactionID string, direction string, amount int64, currency string, balanceBefore int64, balanceAfter int64) (string, error) {
+	var entryID string
+	err := dbTx.QueryRow(ctx,
+		`INSERT INTO wallet_ledger_entries
+		 (wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		 RETURNING id`,
+		walletID, transactionID, direction, amount, currency, balanceBefore, balanceAfter,
+	).Scan(&entryID)
+	if err != nil {
+		return "", fmt.Errorf("insert ledger entry: %w", err)
+	}
+	return entryID, nil
+}
+
+func nullString(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (r *WagerTransactionRepository) scanTransaction(row pgx.Row) (*wagertransaction.Transaction, error) {

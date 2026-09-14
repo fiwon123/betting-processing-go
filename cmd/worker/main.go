@@ -14,6 +14,7 @@ import (
 	"github.com/fiwon123/betting-processing-go/internal/infra/sqs"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/fiwon123/betting-processing-go/internal/wallet"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
@@ -33,6 +34,8 @@ func main() {
 			logger.NewLogger,
 			sqs.New,
 			db.NewPool,
+			db.NewTxManager,
+			func(tm *db.TxManager) *pgxpool.Pool { return tm.Pool() },
 			db.NewWagerTransactionRepository,
 			db.NewInboxRepository,
 			db.NewOutboxRepository,
