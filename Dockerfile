@@ -23,6 +23,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     -o /out/sqs-init \
     ./cmd/sqs-init
 
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/worker \
+    ./cmd/worker
+
 
 # Test
 FROM build-stage AS run-test-stage
@@ -34,6 +41,7 @@ FROM gcr.io/distroless/base-debian12 AS build-release-stage
 
 COPY --from=run-test-stage /out/api /api
 COPY --from=run-test-stage /out/sqs-init /sqs-init
+COPY --from=run-test-stage /out/worker /worker
 
 EXPOSE 8080
 

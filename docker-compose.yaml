@@ -38,6 +38,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.3
@@ -57,6 +58,22 @@ services:
       postgres:
         condition: service_healthy
 
+  sqs-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/sqs-init"]
+    restart: "no"
+    environment:
+      AWS_REGION: ${AWS_REGION}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      SQS_QUEUE_NAME: ${SQS_QUEUE_NAME}
+    depends_on:
+      ministack:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -73,10 +90,10 @@ services:
       API_DB_PASSWORD: ${API_DB_PASSWORD}
       API_DB_SSLMODE: ${API_DB_SSLMODE}
 
-      DB_MIN_CONNS: ${API_DB_MIN_CONNS}
-      DB_MAX_CONNS: ${API_DB_MAX_CONNS}
-      DB_MAX_CONN_LIFETIME: ${API_DB_MAX_CONN_LIFETIME}
-      DB_MAX_CONN_IDLE_TIME: ${API_DB_MAX_CONN_IDLE_TIME}
+      API_DB_MIN_CONNS: ${API_DB_MIN_CONNS}
+      API_DB_MAX_CONNS: ${API_DB_MAX_CONNS}
+      API_DB_MAX_CONN_LIFETIME: ${API_DB_MAX_CONN_LIFETIME}
+      API_DB_MAX_CONN_IDLE_TIME: ${API_DB_MAX_CONN_IDLE_TIME}
 
       AWS_REGION: ${AWS_REGION}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL}
@@ -89,6 +106,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       keycloak:
         condition: service_started
       ministack:
@@ -103,21 +122,42 @@ services:
     environment:
       AWS_REGION: ${AWS_REGION}
 
-  sqs-init:
+  worker:
     build:
       context: .
       dockerfile: Dockerfile
-    entrypoint: ["/sqs-init"]
-    restart: "no"
+    entrypoint: ["/worker"]
     environment:
+      API_ENVIRONMENT: ${API_ENVIRONMENT}
+
+      API_DB_HOST: ${API_DB_HOST}
+      API_DB_PORT: ${API_DB_PORT}
+      API_DB: ${API_DB}
+      API_DB_USER: ${API_DB_USER}
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+      API_DB_SSLMODE: ${API_DB_SSLMODE}
+
+      API_DB_MIN_CONNS: ${API_DB_MIN_CONNS}
+      API_DB_MAX_CONNS: ${API_DB_MAX_CONNS}
+      API_DB_MAX_CONN_LIFETIME: ${API_DB_MAX_CONN_LIFETIME}
+      API_DB_MAX_CONN_IDLE_TIME: ${API_DB_MAX_CONN_IDLE_TIME}
+
       AWS_REGION: ${AWS_REGION}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
       SQS_QUEUE_NAME: ${SQS_QUEUE_NAME}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
     depends_on:
-      ministack:
+      postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      ministack:
+        condition: service_started
+      sqs-init:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:
