@@ -113,8 +113,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      keycloak:
-        condition: service_started
+      keycloak-setup:
+        condition: service_completed_successfully
       ministack:
         condition: service_started
       sqs-init:
@@ -159,21 +159,17 @@ services:
         condition: service_completed_successfully
 
   keycloak-setup:
-    image: curlimages/curl:latest
+    image: alpine:3.20
     depends_on:
       keycloak:
         condition: service_started
     volumes:
-      - ./scripts/keycloak:/scripts:ro
-    entrypoint: ["/bin/sh", "/scripts/setup-test-realm.sh"]
+      - ./scripts/keycloak/setup-test-realm.sh:/scripts/setup-test-realm.sh:ro
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null 2>&1 && /bin/sh /scripts/setup-test-realm.sh"]
     environment:
       KC_URL: http://keycloak:8080
       KC_ADMIN_USERNAME: admin
       KC_ADMIN_PASSWORD: admin
-      KC_DB_HOST: postgres
-      KC_DB_USER: keycloak_test
-      KC_DB_PASSWORD: keycloak_test
-      KC_DB: keycloak_test
     restart: "no"
 
   test-runner:
