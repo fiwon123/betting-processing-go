@@ -30,6 +30,7 @@ var (
 	ErrRoundMismatch          = errors.New("round_mismatch")
 	ErrReversalValueMismatch  = errors.New("reversal_value_mismatch")
 	ErrIdempotentDuplicate    = errors.New("idempotent_duplicate")
+	ErrExternalIDReuse        = errors.New("external_id_reuse")
 )
 
 // IsTerminalBusinessError returns true for errors that represent definitive
@@ -56,5 +57,6 @@ func IsTerminalBusinessError(err error) bool {
 		errors.Is(err, ErrRoundMismatch) ||
 		errors.Is(err, ErrReversalValueMismatch) ||
 		errors.Is(err, ErrInvalidStateTransition) ||
-		errors.Is(err, 		ErrIdempotentDuplicate)
+		errors.Is(err, ErrIdempotentDuplicate) ||
+		errors.Is(err, ErrExternalIDReuse)
 }

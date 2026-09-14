@@ -116,6 +116,14 @@ func (s *Service) ProcessTransaction(ctx context.Context, req Request, idempoten
 		return nil, fmt.Errorf("check idempotency: %w", err)
 	}
 
+	extExists, err := s.repo.ExternalTransactionExists(ctx, req.ProviderID, req.ExternalTransactionID, idempotencyKey)
+	if err != nil {
+		return nil, fmt.Errorf("check external id: %w", err)
+	}
+	if extExists {
+		return nil, ErrExternalIDReuse
+	}
+
 	kind := TransactionType(req.Kind)
 	if !kind.Valid() {
 		return nil, ErrInvalidTransactionType
@@ -146,7 +154,7 @@ func (s *Service) ProcessTransaction(ctx context.Context, req Request, idempoten
 	case BET:
 		return s.processBet(ctx, tx, parsed, messageID)
 	case WIN:
-		return s.processWin(ctx, tx, parsed, messageID)
+		return s.processWin(ctx, tx, req, parsed, messageID)
 	case LOSS:
 		return s.processLoss(ctx, tx, messageID)
 	case REFUND:
@@ -187,6 +195,12 @@ func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.
 		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletError(err)
 		tx.SetFailureCode(failureCode)
+		if failureCode == "INSUFFICIENT_BALANCE" || failureCode == "CURRENCY_MISMATCH" {
+			w, wErr := s.getWalletBalance(ctx, tx.WalletID())
+			if wErr == nil {
+				tx.SetResultBalance(w)
+			}
+		}
 		_ = s.createAndReject(ctx, tx, failureCode)
 		if errors.Is(err, wallet.ErrConcurrentUpdate) {
 			if s.metrics != nil {
@@ -200,6 +214,7 @@ func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.
 		return nil, fmt.Errorf("%w: %w", ErrInsufficientBalance, err)
 	}
 
+	tx.SetResultBalance(balAfter)
 	err = s.commitWithLedger(ctx, dbTx, tx, domain.DEBIT, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
@@ -211,7 +226,32 @@ func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.
 	return s.result(tx, balAfter)
 }
 
-func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.Money, messageID string) (*ProcessResult, error) {
+func (s *Service) processWin(ctx context.Context, tx *Transaction, req Request, amount money.Money, messageID string) (*ProcessResult, error) {
+	if req.ReferenceExternalID != "" {
+		ref, err := s.repo.FindByProviderAndExternalID(ctx, req.ProviderID, req.ReferenceExternalID)
+		if err != nil {
+			if errors.Is(err, ErrTransactionNotFound) {
+				return s.reject(ctx, tx, "REFERENCE_NOT_FOUND")
+			}
+			return nil, err
+		}
+		if ref.TransactionType() != BET {
+			return s.reject(ctx, tx, "REFERENCE_NOT_FOUND")
+		}
+		if ref.PlayerID() != tx.PlayerID() {
+			return s.reject(ctx, tx, "PLAYER_MISMATCH")
+		}
+		if ref.WalletID() != tx.WalletID() {
+			return s.reject(ctx, tx, "WALLET_MISMATCH")
+		}
+		if ref.Amount().Currency() != tx.Amount().Currency() {
+			return s.reject(ctx, tx, "CURRENCY_MISMATCH")
+		}
+		if ref.RoundID() != tx.RoundID() {
+			return s.reject(ctx, tx, "ROUND_MISMATCH")
+		}
+	}
+
 	dbTx, err := s.txFactory.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin win transaction: %w", err)
@@ -223,6 +263,12 @@ func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.
 		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletError(err)
 		tx.SetFailureCode(failureCode)
+		if failureCode == "INSUFFICIENT_BALANCE" || failureCode == "CURRENCY_MISMATCH" {
+			w, wErr := s.getWalletBalance(ctx, tx.WalletID())
+			if wErr == nil {
+				tx.SetResultBalance(w)
+			}
+		}
 		_ = s.createAndReject(ctx, tx, failureCode)
 		if errors.Is(err, wallet.ErrConcurrentUpdate) {
 			if s.metrics != nil {
@@ -236,6 +282,7 @@ func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.
 		return nil, fmt.Errorf("%w: %w", ErrInsufficientBalance, err)
 	}
 
+	tx.SetResultBalance(balAfter)
 	err = s.commitWithLedger(ctx, dbTx, tx, domain.CREDIT, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
@@ -255,6 +302,12 @@ func (s *Service) processLoss(ctx context.Context, tx *Transaction, messageID st
 		return nil, fmt.Errorf("begin loss transaction: %w", err)
 	}
 	defer dbTx.Rollback(ctx)
+
+	w, err := s.getWalletBalance(ctx, tx.WalletID())
+	if err != nil {
+		return nil, err
+	}
+	tx.SetResultBalance(w)
 
 	if messageID != "" {
 		if _, err := s.inboxRepo.RecordReceivedTx(ctx, dbTx, consumerName, messageID, ""); err != nil {
@@ -304,12 +357,12 @@ func (s *Service) processLoss(ctx context.Context, tx *Transaction, messageID st
 		s.metrics.TransactionsTotal.WithLabelValues("PROCESSED").Inc()
 	}
 
-	w, err := s.getWalletBalance(ctx, tx.WalletID())
+	w2, err := s.getWalletBalance(ctx, tx.WalletID())
 	if err != nil {
 		return nil, err
 	}
 
-	return s.result(tx, w)
+	return s.result(tx, w2)
 }
 
 func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Request, amount money.Money, messageID string) (*ProcessResult, error) {
@@ -401,11 +454,18 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletErrorForReversal(err)
 		tx.SetFailureCode(failureCode)
+		if failureCode == "REVERSAL_INSUFFICIENT_BALANCE" || failureCode == "CURRENCY_MISMATCH" {
+			w, wErr := s.getWalletBalance(ctx, tx.WalletID())
+			if wErr == nil {
+				tx.SetResultBalance(w)
+			}
+		}
 		_ = s.createAndReject(ctx, tx, failureCode)
 		return nil, err
 	}
 
 	tx.SetInternalReference(ref.ID())
+	tx.SetResultBalance(balAfter)
 	err = s.commitWithLedger(ctx, dbTx, tx, domain.CREDIT, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
@@ -520,11 +580,18 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletErrorForReversal(err)
 		tx.SetFailureCode(failureCode)
+		if failureCode == "REVERSAL_INSUFFICIENT_BALANCE" || failureCode == "CURRENCY_MISMATCH" {
+			w, wErr := s.getWalletBalance(ctx, tx.WalletID())
+			if wErr == nil {
+				tx.SetResultBalance(w)
+			}
+		}
 		_ = s.createAndReject(ctx, tx, failureCode)
 		return nil, err
 	}
 
 	tx.SetInternalReference(ref.ID())
+	tx.SetResultBalance(balAfter)
 	err = s.commitWithLedger(ctx, dbTx, tx, dir, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
@@ -661,6 +728,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 		}
 
 		tx.SetInternalReference(ref.ID())
+		tx.SetResultBalance(balAfter)
 		err = s.commitWithLedger(ctx, dbTx, tx, dir, amount, balBefore, balAfter, walletVersion, "")
 		if err != nil {
 			return nil, err
@@ -782,6 +850,10 @@ func (s *Service) commitWithLedger(ctx context.Context, dbTx domain.DBTx, tx *Tr
 	txID, err := s.repo.CreateTransactionTx(ctx, dbTx, tx)
 	if err != nil {
 		if isUniqueViolation(err) {
+			if (tx.TransactionType() == REFUND || tx.TransactionType() == ROLLBACK) && tx.InternalReference() != "" {
+				_ = dbTx.Rollback(ctx)
+				return ErrDoubleReversal
+			}
 			existing, findErr := s.repo.FindByIdempotencyKey(ctx, tx.Provider(), tx.IdempotencyKey())
 			if findErr == nil && existing != nil {
 				_ = dbTx.Rollback(ctx)

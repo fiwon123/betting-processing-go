@@ -16,6 +16,7 @@ type Repository interface {
 	FindPendingReferences(ctx context.Context, limit int) ([]*Transaction, error)
 	HasSuccessfulReversal(ctx context.Context, referenceID string) (bool, error)
 	IncrementRefAttempts(ctx context.Context, id string) error
+	ExternalTransactionExists(ctx context.Context, provider, externalID, excludeIdempotencyKey string) (bool, error)
 
 	CreateTransactionTx(ctx context.Context, tx domain.DBTx, t *Transaction) (string, error)
 	UpdateStatusTx(ctx context.Context, tx domain.DBTx, id string, status TransactionStatus, failureCode string) error

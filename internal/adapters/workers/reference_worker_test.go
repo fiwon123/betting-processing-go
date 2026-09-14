@@ -44,6 +44,10 @@ func (r *stubRefRepo) HasSuccessfulReversal(_ context.Context, _ string) (bool, 
 
 func (r *stubRefRepo) IncrementRefAttempts(_ context.Context, _ string) error { return nil }
 
+func (r *stubRefRepo) ExternalTransactionExists(_ context.Context, _, _, _ string) (bool, error) {
+	return false, nil
+}
+
 func (r *stubRefRepo) CreateTransactionTx(_ context.Context, _ domain.DBTx, _ *wagertransaction.Transaction) (string, error) {
 	return "", nil
 }

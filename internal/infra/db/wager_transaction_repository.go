@@ -182,6 +182,21 @@ func (r *WagerTransactionRepository) IncrementRefAttempts(ctx context.Context, i
 	return nil
 }
 
+func (r *WagerTransactionRepository) ExternalTransactionExists(ctx context.Context, provider, externalID, excludeIdempotencyKey string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM wager_transactions
+			WHERE provider = $1 AND external_id = $2
+			  AND (idempotency_key IS DISTINCT FROM $3)
+		)`, provider, externalID, nullString(excludeIdempotencyKey),
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check external transaction exists: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *WagerTransactionRepository) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *wagertransaction.Transaction) (string, error) {
 	var txID string
 	var rbAmount *int64

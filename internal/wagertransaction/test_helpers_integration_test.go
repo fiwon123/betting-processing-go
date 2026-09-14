@@ -245,6 +245,18 @@ func (r *testRepo) IncrementRefAttempts(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *testRepo) ExternalTransactionExists(ctx context.Context, provider, externalID, excludeIdempotencyKey string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM wager_transactions
+			WHERE provider = $1 AND external_id = $2
+			  AND (idempotency_key IS DISTINCT FROM $3)
+		)`, provider, externalID, nullString(excludeIdempotencyKey),
+	).Scan(&exists)
+	return exists, err
+}
+
 func (r *testRepo) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *Transaction) (string, error) {
 	var txID string
 	err := dbTx.QueryRow(ctx,
