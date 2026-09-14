@@ -48,6 +48,10 @@ func (r *stubRefRepo) ExternalTransactionExists(_ context.Context, _, _, _ strin
 	return false, nil
 }
 
+func (r *stubRefRepo) ClaimPendingReferenceTx(_ context.Context, _ domain.DBTx, _ string) (bool, error) {
+	return false, nil
+}
+
 func (r *stubRefRepo) CreateTransactionTx(_ context.Context, _ domain.DBTx, _ *wagertransaction.Transaction) (string, error) {
 	return "", nil
 }

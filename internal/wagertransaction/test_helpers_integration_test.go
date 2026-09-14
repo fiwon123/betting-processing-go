@@ -333,6 +333,18 @@ func (r *testRepo) ExternalTransactionExists(ctx context.Context, provider, exte
 	return exists, err
 }
 
+func (r *testRepo) ClaimPendingReferenceTx(ctx context.Context, dbTx domain.DBTx, txID string) (bool, error) {
+	tag, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions
+		 SET status = 'PROCESSING', updated_at = now()
+		 WHERE id = $1 AND status = 'PENDING_REFERENCE'`, txID,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (r *testRepo) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *Transaction) (string, error) {
 	var txID string
 	err := dbTx.QueryRow(ctx,

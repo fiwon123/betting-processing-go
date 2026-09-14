@@ -151,20 +151,29 @@ func (s *Service) ProcessTransaction(ctx context.Context, req Request, idempoten
 		return nil, err
 	}
 
+	var result *ProcessResult
 	switch kind {
 	case BET:
-		return s.processBet(ctx, tx, parsed, messageID)
+		result, err = s.processBet(ctx, tx, parsed, messageID)
 	case WIN:
-		return s.processWin(ctx, tx, req, parsed, messageID)
+		result, err = s.processWin(ctx, tx, req, parsed, messageID)
 	case LOSS:
-		return s.processLoss(ctx, tx, messageID)
+		result, err = s.processLoss(ctx, tx, messageID)
 	case REFUND:
-		return s.processRefund(ctx, tx, req, parsed, messageID)
+		result, err = s.processRefund(ctx, tx, req, parsed, messageID)
 	case ROLLBACK:
-		return s.processRollback(ctx, tx, req, parsed, messageID)
+		result, err = s.processRollback(ctx, tx, req, parsed, messageID)
 	default:
 		return nil, ErrInvalidTransactionType
 	}
+
+	if err != nil && errors.Is(err, ErrIdempotentDuplicate) {
+		existing, findErr := s.repo.FindByIdempotencyKey(ctx, req.ProviderID, idempotencyKey)
+		if findErr == nil && existing != nil {
+			return s.handleReplay(ctx, existing)
+		}
+	}
+	return result, err
 }
 
 func (s *Service) handleReplay(ctx context.Context, existing *Transaction) (*ProcessResult, error) {
@@ -612,15 +621,37 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 		return s.result(tx, money.Money{})
 	}
 
+	dbTx, err := s.txFactory.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin claim transaction: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	claimed, err := s.repo.ClaimPendingReferenceTx(ctx, dbTx, txID)
+	if err != nil {
+		return nil, fmt.Errorf("claim pending reference: %w", err)
+	}
+	if err := dbTx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit claim: %w", err)
+	}
+
+	if !claimed {
+		tx, err = s.repo.FindByID(ctx, txID)
+		if err != nil {
+			return nil, err
+		}
+		return s.result(tx, money.Money{})
+	}
+
 	if tx.RefAttempts() >= maxRefAttempts {
-		return s.reject(ctx, tx, "REFERENCE_NOT_FOUND")
+		return s.resolveRejectInPlace(ctx, tx, "REFERENCE_NOT_FOUND")
 	}
 
 	ref, err := s.repo.FindByProviderAndExternalID(ctx, tx.Provider(), tx.ExternalReference())
 	if err != nil {
 		if errors.Is(err, ErrTransactionNotFound) {
 			_ = s.repo.IncrementRefAttempts(ctx, tx.ID())
-			return s.reject(ctx, tx, "REFERENCE_NOT_FOUND")
+			return s.resolveRejectInPlace(ctx, tx, "REFERENCE_NOT_FOUND")
 		}
 		return nil, err
 	}
@@ -637,25 +668,25 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 	}
 
 	if ref.Status() == REJECTED || ref.Status() == FAILED {
-		return s.reject(ctx, tx, "REFERENCE_NOT_SUCCESSFUL")
+		return s.resolveRejectInPlace(ctx, tx, "REFERENCE_NOT_SUCCESSFUL")
 	}
 
 	if ref.Status() == PROCESSED {
 		hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID())
 		if hasReversal {
-			return s.reject(ctx, tx, "DOUBLE_REVERSAL")
+			return s.resolveRejectInPlace(ctx, tx, "DOUBLE_REVERSAL")
 		}
 
 		amount := tx.Amount()
 		if err := s.validateReversalValue(amount, ref); err != nil {
-			return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
+			return s.resolveRejectInPlace(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 		}
 
-		dbTx, err := s.txFactory.Begin(ctx)
+		resTx, err := s.txFactory.Begin(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("begin resolve-ref transaction: %w", err)
 		}
-		defer dbTx.Rollback(ctx)
+		defer resTx.Rollback(ctx)
 
 		var dir domain.Direction
 		var balBefore, balAfter money.Money
@@ -663,35 +694,29 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 
 		switch tx.TransactionType() {
 		case REFUND:
-			balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
+			balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, resTx, tx.WalletID(), amount)
 			dir = domain.CREDIT
 		case ROLLBACK:
 			switch ref.TransactionType() {
 			case BET:
-				balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
+				balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, resTx, tx.WalletID(), amount)
 				dir = domain.CREDIT
 			case WIN, REFUND:
-				balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, dbTx, tx.WalletID(), amount)
+				balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, resTx, tx.WalletID(), amount)
 				dir = domain.DEBIT
 			default:
-				return s.reject(ctx, tx, "INVALID_REFERENCE_TYPE")
+				return s.resolveRejectInPlace(ctx, tx, "INVALID_REFERENCE_TYPE")
 			}
 		default:
-			return s.reject(ctx, tx, "INVALID_REFERENCE_TYPE")
+			return s.resolveRejectInPlace(ctx, tx, "INVALID_REFERENCE_TYPE")
 		}
 
 		if err != nil {
-			_ = dbTx.Rollback(ctx)
+			_ = resTx.Rollback(ctx)
 			failureCode := mapWalletErrorForReversal(err)
 			tx.SetFailureCode(failureCode)
 
-			rejectTx, err := s.txFactory.Begin(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("begin reject update: %w", err)
-			}
-			defer rejectTx.Rollback(ctx)
-
-			err = s.repo.UpdateStatusTx(ctx, rejectTx, tx.ID(), REJECTED, failureCode)
+			err = s.repo.UpdateStatusTx(ctx, resTx, tx.ID(), REJECTED, failureCode)
 			if err != nil {
 				return nil, fmt.Errorf("update rejected status: %w", err)
 			}
@@ -716,12 +741,12 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 				},
 			}
 			payload, _ := json.Marshal(rejectedEvent)
-			err = s.repo.CreateOutboxEventTx(ctx, rejectTx, rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload)
+			err = s.repo.CreateOutboxEventTx(ctx, resTx, rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload)
 			if err != nil {
 				return nil, fmt.Errorf("insert rejected outbox event: %w", err)
 			}
 
-			if err := rejectTx.Commit(ctx); err != nil {
+			if err := resTx.Commit(ctx); err != nil {
 				return nil, fmt.Errorf("commit reject: %w", err)
 			}
 
@@ -730,15 +755,93 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 
 		tx.SetInternalReference(ref.ID())
 		tx.SetResultBalance(balAfter)
-		err = s.commitWithLedger(ctx, dbTx, tx, dir, amount, balBefore, balAfter, walletVersion, "")
+
+		err = s.repo.UpdateStatusTx(ctx, resTx, tx.ID(), PROCESSED, "")
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("update resolved status: %w", err)
+		}
+		err = s.repo.SetInternalReference(ctx, tx.ID(), ref.ID())
+		if err != nil {
+			return nil, fmt.Errorf("set internal reference: %w", err)
+		}
+
+		_, err = s.repo.CreateWalletLedgerEntryTx(ctx, resTx,
+			tx.WalletID(), tx.ID(), string(dir), amount.Amount(), string(amount.Currency()),
+			balBefore.Amount(), balAfter.Amount(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("insert ledger entry: %w", err)
+		}
+
+		events := buildTransactionEvents(tx, dir, amount, balBefore, balAfter, walletVersion)
+		for _, ev := range events {
+			payload, _ := json.Marshal(ev)
+			err = s.repo.CreateOutboxEventTx(ctx, resTx, ev.AggregateType, ev.AggregateID, ev.EventType, payload)
+			if err != nil {
+				return nil, fmt.Errorf("insert outbox event: %w", err)
+			}
+		}
+
+		if err := resTx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit resolve: %w", err)
 		}
 
 		return s.result(tx, balAfter)
 	}
 
-	return s.reject(ctx, tx, "REFERENCE_NOT_SUCCESSFUL")
+	return s.resolveRejectInPlace(ctx, tx, "REFERENCE_NOT_SUCCESSFUL")
+}
+
+func (s *Service) resolveRejectInPlace(ctx context.Context, tx *Transaction, failureCode string) (*ProcessResult, error) {
+	tx.SetFailureCode(failureCode)
+	tx.TransitionTo(REJECTED)
+
+	dbTx, err := s.txFactory.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin reject-in-place transaction: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	err = s.repo.UpdateStatusTx(ctx, dbTx, tx.ID(), REJECTED, failureCode)
+	if err != nil {
+		return nil, fmt.Errorf("update rejected status: %w", err)
+	}
+
+	rejectedEvent := domain.Event{
+		EventID:       fmt.Sprintf("evt-%s-rejected", tx.ID()),
+		CorrelationID: tx.ID(),
+		EventType:     "WagerTransactionRejected",
+		AggregateType: "WagerTransaction",
+		AggregateID:   tx.ID(),
+		OccurredAt:    tx.UpdatedAt(),
+		Version:       1,
+		Data: domain.WagerTransactionRejectedData{
+			TransactionID: tx.ID(),
+			ExternalID:    tx.ExternalID(),
+			ProviderID:    tx.Provider(),
+			PlayerID:      tx.PlayerID(),
+			WalletID:      tx.WalletID(),
+			Kind:          string(tx.TransactionType()),
+			Money:         tx.Amount(),
+			FailureCode:   failureCode,
+		},
+	}
+	payload, _ := json.Marshal(rejectedEvent)
+	err = s.repo.CreateOutboxEventTx(ctx, dbTx, rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload)
+	if err != nil {
+		return nil, fmt.Errorf("insert rejected outbox event: %w", err)
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit reject: %w", err)
+	}
+
+	w, _ := s.getWalletBalance(ctx, tx.WalletID())
+	return &ProcessResult{
+		TransactionID: tx.ID(),
+		Status:        string(REJECTED),
+		Balance:       w,
+	}, nil
 }
 
 func (s *Service) createAndReject(ctx context.Context, tx *Transaction, failureCode string) error {

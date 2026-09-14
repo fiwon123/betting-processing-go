@@ -197,6 +197,18 @@ func (r *WagerTransactionRepository) ExternalTransactionExists(ctx context.Conte
 	return exists, nil
 }
 
+func (r *WagerTransactionRepository) ClaimPendingReferenceTx(ctx context.Context, dbTx domain.DBTx, txID string) (bool, error) {
+	tag, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions
+		 SET status = 'PROCESSING', updated_at = now()
+		 WHERE id = $1 AND status = 'PENDING_REFERENCE'`, txID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("claim pending reference: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (r *WagerTransactionRepository) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *wagertransaction.Transaction) (string, error) {
 	var txID string
 	var rbAmount *int64
