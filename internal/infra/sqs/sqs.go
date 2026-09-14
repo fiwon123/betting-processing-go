@@ -130,7 +130,6 @@ func (c *Client) SendMessage(
 		return fmt.Errorf("message body is required")
 	}
 
-	// FIFO queues require MessageGroupId.
 	if strings.HasSuffix(queueURL, ".fifo") &&
 		strings.TrimSpace(messageGroupID) == "" {
 		return fmt.Errorf("message group ID is required for FIFO queues")

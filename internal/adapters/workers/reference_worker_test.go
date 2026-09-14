@@ -82,8 +82,8 @@ func TestReferenceWorker_StartStop(t *testing.T) {
 		repo,
 		&stubInboxRepoRef{},
 		&stubOutboxRepoRef{},
-		nil, // walletSvc not needed for start/stop test
-		nil, // pool not needed for start/stop test
+		nil,
+		nil,
 		nil,
 	)
 

@@ -28,5 +28,4 @@ var (
 	ErrLedgerImmutability     = errors.New("ledger_entries_are_immutable")
 	ErrZeroAmountRequired     = errors.New("zero_amount_required")
 	ErrPositiveAmountRequired = errors.New("positive_amount_required")
-	ErrMaxRetriesExceeded     = errors.New("max_retries_exceeded")
 )

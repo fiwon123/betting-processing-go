@@ -31,7 +31,6 @@ var (
 	ErrCurrencyMismatch       = errors.New("currency_mismatch")
 	ErrRoundMismatch          = errors.New("round_mismatch")
 	ErrReversalValueMismatch  = errors.New("reversal_value_mismatch")
-	ErrMaxRetriesExceeded     = errors.New("max_retries_exceeded")
 	ErrIdempotentDuplicate    = errors.New("idempotent_duplicate")
 )
 

@@ -8,7 +8,6 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 )
 
 func skipIfNoEnv(t *testing.T) {
@@ -25,8 +24,6 @@ func getProviderToken(t *testing.T, env *TestEnv, username, password string) str
 	}
 	return token
 }
-
-// --- Wallet Operations ---
 
 func TestE2E_WalletCreate(t *testing.T) {
 	skipIfNoEnv(t)
@@ -126,8 +123,6 @@ func TestE2E_WalletGet(t *testing.T) {
 	result := ReadBody(getResp)
 	t.Logf("wallet: %v", result)
 }
-
-// --- Transaction Operations ---
 
 func TestE2E_BetProcesssed(t *testing.T) {
 	skipIfNoEnv(t)
@@ -410,8 +405,6 @@ func TestE2E_DoubleRefundRejected(t *testing.T) {
 	t.Logf("second refund correctly rejected: %v", result)
 }
 
-// --- Provider Isolation ---
-
 func TestE2E_ProviderIsolation(t *testing.T) {
 	skipIfNoEnv(t)
 	env := NewTestEnv()
@@ -488,8 +481,6 @@ func TestE2E_ProviderCannotBetOnOtherProviderWallet(t *testing.T) {
 	t.Logf("provider isolation enforced on bet: %d", betResp.StatusCode)
 }
 
-// --- Concurrency ---
-
 func TestE2E_ConcurrentBets_Idempotent(t *testing.T) {
 	skipIfNoEnv(t)
 	env := NewTestEnv()
@@ -547,7 +538,6 @@ func TestE2E_ConcurrentBets_Idempotent(t *testing.T) {
 	}
 
 	t.Logf("concurrent requests: %d created out of %d", successCount, goroutines)
-	// With idempotency key, only 1 should succeed; others may get 409 or 201 (idempotent replay)
 }
 
 func TestE2E_TwoBetsOn100Balance(t *testing.T) {
@@ -620,8 +610,6 @@ func TestE2E_TwoBetsOn100Balance(t *testing.T) {
 	}
 }
 
-// --- Health & Metrics ---
-
 func TestE2E_HealthLive(t *testing.T) {
 	skipIfNoEnv(t)
 	env := NewTestEnv()
@@ -669,9 +657,6 @@ func TestE2E_Metrics(t *testing.T) {
 	}
 	t.Log("metrics endpoint: OK")
 }
-
-// --- Security & Authorization ---
-
 func TestE2E_Unauthorized_NoSideEffects(t *testing.T) {
 	skipIfNoEnv(t)
 	env := NewTestEnv()
