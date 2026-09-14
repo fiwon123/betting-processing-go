@@ -7,52 +7,76 @@ import (
 
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/fx"
 )
 
-func NewPool(cfg cfg.DatabaseConfig) (*pgxpool.Pool, error) {
-	if cfg.URL == "" {
+func NewPool(
+	lc fx.Lifecycle,
+	databaseConfig cfg.DatabaseConfig,
+) (*pgxpool.Pool, error) {
+	if databaseConfig.URL == "" {
 		return nil, fmt.Errorf("database URL is required")
 	}
 
-	if cfg.MinConns < 0 {
+	if databaseConfig.MinConns < 0 {
 		return nil, fmt.Errorf("database minimum connections cannot be negative")
 	}
 
-	if cfg.MaxConns <= 0 {
+	if databaseConfig.MaxConns <= 0 {
 		return nil, fmt.Errorf("database maximum connections must be greater than zero")
 	}
 
-	if cfg.MinConns > cfg.MaxConns {
-		return nil, fmt.Errorf("database minimum connections cannot exceed maximum connections")
+	if databaseConfig.MinConns > databaseConfig.MaxConns {
+		return nil, fmt.Errorf(
+			"database minimum connections cannot exceed maximum connections",
+		)
 	}
 
-	poolConfig, err := pgxpool.ParseConfig(cfg.URL)
+	if databaseConfig.MaxConnLifetime < 0 {
+		return nil, fmt.Errorf(
+			"database maximum connection lifetime cannot be negative",
+		)
+	}
+
+	if databaseConfig.MaxConnIdleTime < 0 {
+		return nil, fmt.Errorf(
+			"database maximum connection idle time cannot be negative",
+		)
+	}
+
+	poolConfig, err := pgxpool.ParseConfig(databaseConfig.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
 
-	poolConfig.MinConns = cfg.MinConns
-	poolConfig.MaxConns = cfg.MaxConns
-	poolConfig.MaxConnLifetime = cfg.MaxConnLifetime
-	poolConfig.MaxConnIdleTime = cfg.MaxConnIdleTime
+	poolConfig.MinConns = databaseConfig.MinConns
+	poolConfig.MaxConns = databaseConfig.MaxConns
+	poolConfig.MaxConnLifetime = databaseConfig.MaxConnLifetime
+	poolConfig.MaxConnIdleTime = databaseConfig.MaxConnIdleTime
 	poolConfig.HealthCheckPeriod = time.Minute
 	poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second
 
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		5*time.Second,
-	)
-	defer cancel()
-
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping database: %w", err)
-	}
+	lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			if err := pool.Ping(pingCtx); err != nil {
+				return fmt.Errorf("ping database: %w", err)
+			}
+
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			pool.Close()
+			return nil
+		},
+	})
 
 	return pool, nil
 }
