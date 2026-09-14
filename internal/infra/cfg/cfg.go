@@ -13,6 +13,7 @@ type Config struct {
 	Database    DatabaseConfig
 	AWS         AWSConfig
 	SQS         SQSConfig
+	OIDC        OIDCConfig
 }
 
 type DatabaseConfig struct {
@@ -30,6 +31,13 @@ type AWSConfig struct {
 
 type SQSConfig struct {
 	QueueURL string
+}
+
+type OIDCConfig struct {
+	Enabled   bool
+	IssuerURL string
+	ClientID  string
+	JWKSURL   string
 }
 
 func NewConfig() (Config, error) {
@@ -53,6 +61,12 @@ func NewConfig() (Config, error) {
 		},
 		SQS: SQSConfig{
 			QueueURL: os.Getenv("SQS_QUEUE_URL"),
+		},
+		OIDC: OIDCConfig{
+			Enabled:   GetEnv("API_OIDC_ENABLED", "false") == "true",
+			IssuerURL: GetEnv("API_OIDC_ISSUER_URL", ""),
+			ClientID:  GetEnv("API_OIDC_CLIENT_ID", ""),
+			JWKSURL:   GetEnv("API_OIDC_JWKS_URL", ""),
 		},
 	}, nil
 }
