@@ -133,14 +133,19 @@ func (w *WagerSQSWorker) processMessage(
 		messageID = envelope.MessageID
 	}
 
-	log := w.log.With(zap.String("correlation_id", messageID))
+	log := w.log.With(
+		zap.String("correlation_id", messageID),
+		zap.String("message_id", messageID),
+		zap.String("provider_id", envelope.Data.ProviderID),
+		zap.String("wallet_id", envelope.Data.WalletID),
+	)
 
 	key := envelope.Data.IdempotencyKey
 	if key == "" {
 		key = buildIdempotencyKey(envelope.Data)
 	}
 
-	_, err := w.service.ProcessTransaction(
+	result, err := w.service.ProcessTransaction(
 		ctx,
 		envelope.Data,
 		key,
@@ -167,6 +172,14 @@ func (w *WagerSQSWorker) processMessage(
 		}
 
 		return
+	}
+
+	if result != nil {
+		log.Info(
+			"SQS message processed",
+			zap.String("transaction_id", result.TransactionID),
+			zap.String("status", result.Status),
+		)
 	}
 
 	if err := w.deleteMessage(ctx, message.ReceiptHandle); err != nil {
