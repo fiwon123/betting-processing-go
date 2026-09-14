@@ -14,28 +14,63 @@ type testRepo struct {
 	pool *pgxpool.Pool
 }
 
-func (r *testRepo) FindByIdempotencyKey(_ context.Context, _, _ string) (*Transaction, error) {
-	return nil, ErrTransactionNotFound
+func (r *testRepo) FindByIdempotencyKey(ctx context.Context, provider, idempotencyKey string) (*Transaction, error) {
+	var id, externalID, walletID, playerID string
+	var status string
+	var payloadHash string
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, external_transaction_id, wallet_id, player_id, status, COALESCE(payload_hash,'')
+		 FROM wager_transactions WHERE provider_id = $1 AND idempotency_key = $2 LIMIT 1`,
+		provider, idempotencyKey,
+	).Scan(&id, &externalID, &walletID, &playerID, &status, &payloadHash)
+	if err != nil {
+		return nil, ErrTransactionNotFound
+	}
+	return &Transaction{id: id, externalID: externalID, walletID: walletID, playerID: playerID, status: TransactionStatus(status), payloadHash: payloadHash}, nil
 }
-func (r *testRepo) FindByProviderAndExternalID(_ context.Context, _, _ string) (*Transaction, error) {
-	return nil, ErrTransactionNotFound
+
+func (r *testRepo) FindByProviderAndExternalID(ctx context.Context, provider, externalID string) (*Transaction, error) {
+	var id, walletID, playerID string
+	var status string
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, wallet_id, player_id, status FROM wager_transactions WHERE provider_id = $1 AND external_transaction_id = $2 LIMIT 1`,
+		provider, externalID,
+	).Scan(&id, &walletID, &playerID, &status)
+	if err != nil {
+		return nil, ErrTransactionNotFound
+	}
+	return &Transaction{id: id, externalID: externalID, walletID: walletID, playerID: playerID, status: TransactionStatus(status)}, nil
 }
-func (r *testRepo) FindByID(_ context.Context, _ string) (*Transaction, error) {
-	return nil, ErrTransactionNotFound
+
+func (r *testRepo) FindByID(ctx context.Context, id string) (*Transaction, error) {
+	var externalID, walletID, playerID string
+	var status string
+	err := r.pool.QueryRow(ctx,
+		`SELECT external_transaction_id, wallet_id, player_id, status FROM wager_transactions WHERE id = $1`, id,
+	).Scan(&externalID, &walletID, &playerID, &status)
+	if err != nil {
+		return nil, ErrTransactionNotFound
+	}
+	return &Transaction{id: id, externalID: externalID, walletID: walletID, playerID: playerID, status: TransactionStatus(status)}, nil
 }
+
 func (r *testRepo) UpdateStatus(_ context.Context, _ string, _ TransactionStatus, _ string) error {
 	return nil
 }
 func (r *testRepo) SetInternalReference(_ context.Context, _ string, _ string) error { return nil }
+
 func (r *testRepo) FindPending(_ context.Context, _ int) ([]*Transaction, error) {
 	return nil, nil
 }
+
 func (r *testRepo) FindPendingReferences(_ context.Context, _ int) ([]*Transaction, error) {
 	return nil, nil
 }
+
 func (r *testRepo) HasSuccessfulReversal(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
+
 func (r *testRepo) IncrementRefAttempts(_ context.Context, _ string) error { return nil }
 
 func newTestRepo(pool *pgxpool.Pool) *testRepo {
@@ -116,15 +151,59 @@ func newTestInboxRepo(_ *pgxpool.Pool) *testInboxRepo {
 	return &testInboxRepo{}
 }
 
-type testOutboxRepo struct{}
-
-func (r *testOutboxRepo) CreateEvents(_ context.Context, _ []OutboxEvent) error { return nil }
-func (r *testOutboxRepo) FindPending(_ context.Context, _ int) ([]*OutboxEvent, error) {
-	return nil, nil
+type testOutboxRepo struct {
+	pool *pgxpool.Pool
 }
-func (r *testOutboxRepo) MarkPublished(_ context.Context, _ string) error               { return nil }
-func (r *testOutboxRepo) IncrementAttempts(_ context.Context, _ string, _ string) error { return nil }
 
-func newTestOutboxRepo(_ *pgxpool.Pool) *testOutboxRepo {
-	return &testOutboxRepo{}
+func (r *testOutboxRepo) CreateEvents(ctx context.Context, events []OutboxEvent) error {
+	for _, e := range events {
+		_, err := r.pool.Exec(ctx,
+			`INSERT INTO outbox_events (id, aggregate_type, aggregate_id, event_type, payload, status, attempts, last_error, created_at)
+			 VALUES ($1, $2, $3, $4, $5, 'PENDING', 0, NULL, now())`,
+			e.ID, e.AggregateType, e.AggregateID, e.EventType, e.Payload,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *testOutboxRepo) FindPending(ctx context.Context, limit int) ([]*OutboxEvent, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, aggregate_type, aggregate_id, event_type, payload, attempts
+		 FROM outbox_events WHERE status = 'PENDING' ORDER BY created_at LIMIT $1`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []*OutboxEvent
+	for rows.Next() {
+		e := &OutboxEvent{}
+		if err := rows.Scan(&e.ID, &e.AggregateType, &e.AggregateID, &e.EventType, &e.Payload, &e.Attempts); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, nil
+}
+
+func (r *testOutboxRepo) MarkPublished(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE outbox_events SET status = 'PUBLISHED', published_at = now() WHERE id = $1`, id,
+	)
+	return err
+}
+
+func (r *testOutboxRepo) IncrementAttempts(ctx context.Context, id string, lastError string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE outbox_events SET attempts = attempts + 1, last_error = $2, updated_at = now() WHERE id = $1`,
+		id, lastError,
+	)
+	return err
+}
+
+func newTestOutboxRepo(pool *pgxpool.Pool) *testOutboxRepo {
+	return &testOutboxRepo{pool: pool}
 }

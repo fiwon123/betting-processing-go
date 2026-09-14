@@ -76,7 +76,7 @@ func NewHTTPServer(lc fx.Lifecycle, router chi.Router, log *zap.Logger, cfg cfg.
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: handler,
+		Handler: middleware.CorrelationID(handler),
 	}
 
 	lc.Append(fx.Hook{

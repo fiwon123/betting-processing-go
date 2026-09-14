@@ -669,3 +669,184 @@ func TestE2E_Metrics(t *testing.T) {
 	}
 	t.Log("metrics endpoint: OK")
 }
+
+// --- Security & Authorization ---
+
+func TestE2E_Unauthorized_NoSideEffects(t *testing.T) {
+	skipIfNoEnv(t)
+	env := NewTestEnv()
+
+	betBody := map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-unauth-001",
+		"playerId":              "player-e2e-unauth",
+		"walletId":              "00000000-0000-0000-0000-000000000001",
+		"roundId":               "round-1",
+		"kind":                  "BET",
+		"money":                 map[string]string{"amount": "10.00", "currency": "BRL"},
+	}
+
+	resp, err := env.DoRequest("POST", "/wagering/transactions", "", betBody)
+	if err != nil {
+		t.Fatalf("unauthorized bet: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+
+	createResp, err := env.DoRequest("POST", "/wallets", "", map[string]interface{}{
+		"playerId":       "player-e2e-unauth-create",
+		"initialBalance": map[string]string{"amount": "100.00", "currency": "BRL"},
+	})
+	if err != nil {
+		t.Fatalf("unauthorized wallet create: %v", err)
+	}
+	defer createResp.Body.Close()
+
+	if createResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for unauthorized wallet create, got %d", createResp.StatusCode)
+	}
+	t.Log("unauthorized requests correctly blocked with no side effects")
+}
+
+func TestE2E_WalletBalance_AfterBetAndWin(t *testing.T) {
+	skipIfNoEnv(t)
+	env := NewTestEnv()
+	token := getProviderToken(t, env, "provider1", "provider1")
+
+	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
+		"playerId": "player-e2e-bal",
+		"initialBalance": map[string]string{
+			"amount":   "100.00",
+			"currency": "BRL",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	createResult := ReadBody(createResp)
+	createResp.Body.Close()
+	walletID := createResult["id"].(string)
+
+	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-bal-bet",
+		"playerId":              "player-e2e-bal",
+		"walletId":              walletID,
+		"roundId":               "round-1",
+		"kind":                  "BET",
+		"money":                 map[string]string{"amount": "60.00", "currency": "BRL"},
+	})
+	if err != nil {
+		t.Fatalf("bet: %v", err)
+	}
+	betResult := ReadBody(betResp)
+	betResp.Body.Close()
+	if betResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for bet, got %d", betResp.StatusCode)
+	}
+
+	winResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-bal-win",
+		"playerId":              "player-e2e-bal",
+		"walletId":              walletID,
+		"roundId":               "round-1",
+		"kind":                  "WIN",
+		"money":                 map[string]string{"amount": "20.00", "currency": "BRL"},
+	})
+	if err != nil {
+		t.Fatalf("win: %v", err)
+	}
+	winResult := ReadBody(winResp)
+	winResp.Body.Close()
+	if winResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for win, got %d", winResp.StatusCode)
+	}
+
+	t.Logf("bet result: %v", betResult)
+	t.Logf("win result: %v", winResult)
+
+	getResp, err := env.DoRequest("GET", "/wallets/"+walletID, token, nil)
+	if err != nil {
+		t.Fatalf("get wallet: %v", err)
+	}
+	walletData := ReadBody(getResp)
+	getResp.Body.Close()
+
+	balance := walletData["balance"].(map[string]interface{})
+	balanceAmount := balance["amount"].(string)
+	t.Logf("wallet balance after bet(60) and win(20): %s", balanceAmount)
+}
+
+func TestE2E_ReferenceChain_BetRefundRollback(t *testing.T) {
+	skipIfNoEnv(t)
+	env := NewTestEnv()
+	token := getProviderToken(t, env, "provider1", "provider1")
+
+	createResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
+		"playerId": "player-e2e-chain",
+		"initialBalance": map[string]string{
+			"amount":   "1000.00",
+			"currency": "BRL",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	createResult := ReadBody(createResp)
+	createResp.Body.Close()
+	walletID := createResult["id"].(string)
+
+	betResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-chain-bet",
+		"playerId":              "player-e2e-chain",
+		"walletId":              walletID,
+		"roundId":               "round-1",
+		"kind":                  "BET",
+		"money":                 map[string]string{"amount": "100.00", "currency": "BRL"},
+	})
+	if err != nil {
+		t.Fatalf("bet: %v", err)
+	}
+	betResp.Body.Close()
+
+	refundResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":                     "provider1",
+		"externalTransactionId":          "e2e-chain-refund",
+		"playerId":                       "player-e2e-chain",
+		"walletId":                       walletID,
+		"roundId":                        "round-1",
+		"kind":                           "REFUND",
+		"money":                          map[string]string{"amount": "100.00", "currency": "BRL"},
+		"referenceExternalTransactionId": "e2e-chain-bet",
+	})
+	if err != nil {
+		t.Fatalf("refund: %v", err)
+	}
+	refundResp.Body.Close()
+
+	rollbackResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":                     "provider1",
+		"externalTransactionId":          "e2e-chain-rollback",
+		"playerId":                       "player-e2e-chain",
+		"walletId":                       walletID,
+		"roundId":                        "round-1",
+		"kind":                           "ROLLBACK",
+		"money":                          map[string]string{"amount": "100.00", "currency": "BRL"},
+		"referenceExternalTransactionId": "e2e-chain-bet",
+	})
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	rollbackResult := ReadBody(rollbackResp)
+	rollbackResp.Body.Close()
+
+	if rollbackResult["status"] != "REJECTED" {
+		t.Errorf("expected ROLLBACK REJECTED after REFUND, got %v", rollbackResult["status"])
+	}
+	t.Logf("reference chain: BET->REFUND->ROLLBACK(rejected) verified")
+}

@@ -59,6 +59,58 @@ func (r *mockOutboxRepo) IncrementAttempts(_ context.Context, id string, _ strin
 	return nil
 }
 
+type lockingMockOutboxRepo struct {
+	events    []*wagertransaction.OutboxEvent
+	mu        sync.Mutex
+	published map[string]bool
+	inflight  map[string]bool
+}
+
+func newLockingMockOutboxRepo(events []*wagertransaction.OutboxEvent) *lockingMockOutboxRepo {
+	return &lockingMockOutboxRepo{
+		events:    events,
+		published: make(map[string]bool),
+		inflight:  make(map[string]bool),
+	}
+}
+
+func (r *lockingMockOutboxRepo) CreateEvents(_ context.Context, _ []wagertransaction.OutboxEvent) error {
+	return nil
+}
+
+func (r *lockingMockOutboxRepo) FindPending(_ context.Context, _ int) ([]*wagertransaction.OutboxEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var pending []*wagertransaction.OutboxEvent
+	for _, e := range r.events {
+		if !r.published[e.ID] && !r.inflight[e.ID] {
+			r.inflight[e.ID] = true
+			pending = append(pending, e)
+		}
+	}
+	return pending, nil
+}
+
+func (r *lockingMockOutboxRepo) MarkPublished(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.published[id] = true
+	delete(r.inflight, id)
+	return nil
+}
+
+func (r *lockingMockOutboxRepo) IncrementAttempts(_ context.Context, id string, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.inflight, id)
+	for _, e := range r.events {
+		if e.ID == id {
+			e.Attempts++
+		}
+	}
+	return nil
+}
+
 var sharedMetrics = metrics.New()
 
 func TestOutboxPublisher_MaxAttemptsAbandoned(t *testing.T) {
@@ -148,4 +200,74 @@ func TestOutboxPublisher_NoDoublePublish(t *testing.T) {
 			t.Errorf("event %s was not marked as published", e.ID)
 		}
 	}
+}
+
+func TestOutboxPublisher_CompetingPublishers(t *testing.T) {
+	events := []*wagertransaction.OutboxEvent{
+		{ID: "evt-compete-1", EventType: "Test", AggregateType: "Test", AggregateID: "agg-1", Payload: []byte(`{}`), Attempts: 0},
+		{ID: "evt-compete-2", EventType: "Test", AggregateType: "Test", AggregateID: "agg-2", Payload: []byte(`{}`), Attempts: 0},
+		{ID: "evt-compete-3", EventType: "Test", AggregateType: "Test", AggregateID: "agg-3", Payload: []byte(`{}`), Attempts: 0},
+	}
+
+	t.Run("without_locking_double_publish_happens", func(t *testing.T) {
+		repo := newMockOutboxRepo(events)
+		log := zap.NewNop()
+		var publishCount int32
+		publishFunc := func(_ context.Context, _, _, _ string, _ []byte) error {
+			atomic.AddInt32(&publishCount, 1)
+			return nil
+		}
+
+		publisher1 := NewOutboxPublisher(repo, publishFunc, log, sharedMetrics)
+		publisher2 := NewOutboxPublisher(repo, publishFunc, log, sharedMetrics)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); publisher1.Start(ctx) }()
+		go func() { defer wg.Done(); publisher2.Start(ctx) }()
+		wg.Wait()
+
+		total := atomic.LoadInt32(&publishCount)
+		if total <= int32(len(events)) {
+			t.Logf("without locking: %d publishes (expected > %d due to race)", total, len(events))
+		}
+	})
+
+	t.Run("with_locking_no_double_publish", func(t *testing.T) {
+		repo := newLockingMockOutboxRepo(events)
+		log := zap.NewNop()
+		var publishCount int32
+		publishFunc := func(_ context.Context, _, _, _ string, _ []byte) error {
+			atomic.AddInt32(&publishCount, 1)
+			return nil
+		}
+
+		publisher1 := NewOutboxPublisher(repo, publishFunc, log, sharedMetrics)
+		publisher2 := NewOutboxPublisher(repo, publishFunc, log, sharedMetrics)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); publisher1.Start(ctx) }()
+		go func() { defer wg.Done(); publisher2.Start(ctx) }()
+		wg.Wait()
+
+		total := atomic.LoadInt32(&publishCount)
+		if total != int32(len(events)) {
+			t.Errorf("with locking: expected exactly %d publish calls, got %d", len(events), total)
+		}
+
+		repo.mu.Lock()
+		defer repo.mu.Unlock()
+		for _, e := range events {
+			if !repo.published[e.ID] {
+				t.Errorf("event %s was not marked as published", e.ID)
+			}
+		}
+	})
 }

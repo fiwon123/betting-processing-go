@@ -166,6 +166,7 @@ func SQSPublishFunc(
 			queueURL string,
 			body string,
 			messageGroupID string,
+			messageDeduplicationID string,
 		) error
 	},
 	queueURL string,
@@ -184,12 +185,14 @@ func SQSPublishFunc(
 		payload []byte,
 	) error {
 		messageGroupID := aggregateType + "-" + aggregateID
+		deduplicationID := eventType + "-" + aggregateID
 
 		return sqsClient.SendMessage(
 			ctx,
 			queueURL,
 			string(payload),
 			messageGroupID,
+			deduplicationID,
 		)
 	}
 }

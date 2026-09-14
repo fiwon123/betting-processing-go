@@ -133,6 +133,8 @@ func (w *WagerSQSWorker) processMessage(
 		messageID = envelope.MessageID
 	}
 
+	log := w.log.With(zap.String("correlation_id", messageID))
+
 	key := envelope.Data.IdempotencyKey
 	if key == "" {
 		key = buildIdempotencyKey(envelope.Data)
@@ -150,17 +152,15 @@ func (w *WagerSQSWorker) processMessage(
 			return
 		}
 
-		w.log.Error(
+		log.Error(
 			"service rejected SQS message",
-			zap.String("message_id", messageID),
 			zap.Error(err),
 		)
 
 		if wagertransaction.IsTerminalBusinessError(err) {
 			if delErr := w.deleteMessage(ctx, message.ReceiptHandle); delErr != nil {
-				w.log.Error(
+				log.Error(
 					"failed to delete terminal SQS message",
-					zap.String("message_id", messageID),
 					zap.Error(delErr),
 				)
 			}
@@ -170,9 +170,8 @@ func (w *WagerSQSWorker) processMessage(
 	}
 
 	if err := w.deleteMessage(ctx, message.ReceiptHandle); err != nil {
-		w.log.Error(
+		log.Error(
 			"failed to delete SQS message",
-			zap.String("message_id", messageID),
 			zap.Error(err),
 		)
 	}

@@ -419,7 +419,7 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 
 	balBefore, balAfter, walletVersion, err := s.walletSvc.Credit(ctx, nil, tx.WalletID(), amount)
 	if err != nil {
-		failureCode := mapWalletError(err)
+		failureCode := mapWalletErrorForReversal(err)
 		tx.SetFailureCode(failureCode)
 		_ = s.createAndReject(ctx, tx, failureCode)
 		return nil, err
@@ -551,7 +551,7 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 	}
 
 	if err != nil {
-		failureCode := mapWalletError(err)
+		failureCode := mapWalletErrorForReversal(err)
 		tx.SetFailureCode(failureCode)
 		_ = s.createAndReject(ctx, tx, failureCode)
 		return nil, err
@@ -640,7 +640,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 		}
 
 		if err != nil {
-			failureCode := mapWalletError(err)
+			failureCode := mapWalletErrorForReversal(err)
 			tx.SetFailureCode(failureCode)
 
 			dbTx, err := s.pool.Begin(ctx)
@@ -971,6 +971,17 @@ func mapWalletError(err error) string {
 	errMsg := err.Error()
 	if errors.Is(err, wallet.ErrInsufficientBalance) || errMsg == "insufficient_balance" {
 		return "INSUFFICIENT_BALANCE"
+	}
+	if errors.Is(err, wallet.ErrCurrencyMismatch) || errMsg == "currency_mismatch" {
+		return "CURRENCY_MISMATCH"
+	}
+	return "WALLET_ERROR"
+}
+
+func mapWalletErrorForReversal(err error) string {
+	errMsg := err.Error()
+	if errors.Is(err, wallet.ErrInsufficientBalance) || errMsg == "insufficient_balance" {
+		return "REVERSAL_INSUFFICIENT_BALANCE"
 	}
 	if errors.Is(err, wallet.ErrCurrencyMismatch) || errMsg == "currency_mismatch" {
 		return "CURRENCY_MISMATCH"

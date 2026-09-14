@@ -120,6 +120,7 @@ func (c *Client) SendMessage(
 	queueURL string,
 	body string,
 	messageGroupID string,
+	messageDeduplicationID string,
 ) error {
 	if strings.TrimSpace(queueURL) == "" {
 		return fmt.Errorf("queue URL is required")
@@ -142,6 +143,10 @@ func (c *Client) SendMessage(
 
 	if messageGroupID != "" {
 		input.MessageGroupId = aws.String(messageGroupID)
+	}
+
+	if strings.HasSuffix(queueURL, ".fifo") && messageDeduplicationID != "" {
+		input.MessageDeduplicationId = aws.String(messageDeduplicationID)
 	}
 
 	_, err := c.client.SendMessage(ctx, input)
