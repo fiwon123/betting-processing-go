@@ -2,12 +2,18 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 type TestEnv struct {
@@ -17,17 +23,61 @@ type TestEnv struct {
 	KCClientID     string
 	KCClientSecret string
 	HTTPClient     *http.Client
+	SQSClient      *sqs.Client
+	SQSQueueURL    string
 }
 
 func NewTestEnv() *TestEnv {
-	return &TestEnv{
+	env := &TestEnv{
 		APIBaseURL:     getEnv("API_BASE_URL", "http://localhost:8080"),
 		KCURL:          getEnv("KC_URL", "http://localhost:8081"),
 		KCRealm:        getEnv("KC_REALM", "betting"),
 		KCClientID:     getEnv("KC_CLIENT_ID", "betting-api"),
 		KCClientSecret: getEnv("KC_CLIENT_SECRET", "secret123"),
 		HTTPClient:     &http.Client{Timeout: 30 * time.Second},
+		SQSQueueURL:    getEnv("SQS_QUEUE_URL", ""),
 	}
+
+	if env.SQSQueueURL != "" {
+		cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+			awsconfig.WithRegion(getEnv("AWS_REGION", "us-east-1")),
+			awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+				getEnv("AWS_ACCESS_KEY_ID", "test"),
+				getEnv("AWS_SECRET_ACCESS_KEY", "test"),
+				"",
+			)),
+			awsconfig.WithEndpointResolver(aws.EndpointResolverFunc(
+				func(service, region string) (aws.Endpoint, error) {
+					return aws.Endpoint{
+						URL:           getEnv("AWS_ENDPOINT_URL", "http://localhost:4566"),
+						SigningRegion: region,
+					}, nil
+				},
+			)),
+		)
+		if err == nil {
+			env.SQSClient = sqs.NewFromConfig(cfg)
+		}
+	}
+
+	return env
+}
+
+func (e *TestEnv) SendSQSMessage(ctx context.Context, body string) (string, error) {
+	if e.SQSClient == nil {
+		return "", fmt.Errorf("SQS client not configured")
+	}
+	input := &sqs.SendMessageInput{
+		QueueUrl:               aws.String(e.SQSQueueURL),
+		MessageBody:            aws.String(body),
+		MessageGroupId:         aws.String("e2e-test"),
+		MessageDeduplicationId: aws.String(fmt.Sprintf("e2e-%d", time.Now().UnixNano())),
+	}
+	result, err := e.SQSClient.SendMessage(ctx, input)
+	if err != nil {
+		return "", fmt.Errorf("send SQS message: %w", err)
+	}
+	return aws.ToString(result.MessageId), nil
 }
 
 func (e *TestEnv) GetToken(username, password string) (string, error) {

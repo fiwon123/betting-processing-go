@@ -2,10 +2,18 @@ package middleware
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestGetProviderID(t *testing.T) {
@@ -233,5 +241,141 @@ func TestOIDCAuth_MissingAuthHeaderBodyFormat(t *testing.T) {
 
 	if rec.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", rec.Header().Get("Content-Type"), "application/json")
+	}
+}
+
+func TestOIDCAuth_ExpiredToken(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+
+	kid := "test-kid-expired"
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := big.NewInt(0).SetBytes(key.N.Bytes())
+		e := big.NewInt(int64(key.E))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"keys":[{"kid":"%s","kty":"RSA","alg":"RS256","use":"sig","n":"%s","e":"%s"}]}`,
+			kid,
+			base64.RawURLEncoding.EncodeToString(n.Bytes()),
+			base64.RawURLEncoding.EncodeToString(e.Bytes()),
+		)
+	})
+	jwksServer := httptest.NewServer(jwksHandler)
+	defer jwksServer.Close()
+
+	claims := &JWTClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+			Subject:   "provider1",
+			Issuer:    "https://issuer.example.com",
+		},
+		ProviderID: "provider1",
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	tokenStr, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	cfg := OIDCConfig{
+		IssuerURL: "https://issuer.example.com",
+		ClientID:  "client-id",
+		JWKSURL:   jwksServer.URL,
+	}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("next handler should not be called for expired token")
+	})
+
+	handler := OIDCAuth(cfg)(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["error"] != "invalid_token" {
+		t.Errorf("error = %q, want %q", body["error"], "invalid_token")
+	}
+}
+
+func TestOIDCAuth_MissingProviderID(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+
+	kid := "test-kid-no-subject"
+	jwksHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := big.NewInt(0).SetBytes(key.N.Bytes())
+		e := big.NewInt(int64(key.E))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"keys":[{"kid":"%s","kty":"RSA","alg":"RS256","use":"sig","n":"%s","e":"%s"}]}`,
+			kid,
+			base64.RawURLEncoding.EncodeToString(n.Bytes()),
+			base64.RawURLEncoding.EncodeToString(e.Bytes()),
+		)
+	})
+	jwksServer := httptest.NewServer(jwksHandler)
+	defer jwksServer.Close()
+
+	claims := &JWTClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Subject:   "",
+			Issuer:    "https://issuer.example.com",
+		},
+		ProviderID: "",
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	tokenStr, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	cfg := OIDCConfig{
+		IssuerURL: "https://issuer.example.com",
+		ClientID:  "client-id",
+		JWKSURL:   jwksServer.URL,
+	}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("next handler should not be called for token without provider_id")
+	})
+
+	handler := OIDCAuth(cfg)(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["error"] != "missing_subject" {
+		t.Errorf("error = %q, want %q", body["error"], "missing_subject")
 	}
 }

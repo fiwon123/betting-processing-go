@@ -835,3 +835,110 @@ func TestE2E_ReferenceChain_BetRefundRollback(t *testing.T) {
 	}
 	t.Logf("reference chain: BET->REFUND->ROLLBACK(rejected) verified")
 }
+
+func TestE2E_HTTPAndSQS_SameWalletConsistency(t *testing.T) {
+	skipIfNoEnv(t)
+	env := NewTestEnv()
+
+	if env.SQSClient == nil {
+		t.Skip("SQS client not configured, skipping cross-cutting test")
+	}
+
+	token := getProviderToken(t, env, "provider1", "provider1")
+
+	walletResp, err := env.DoRequest("POST", "/wallets", token, map[string]interface{}{
+		"playerId": "player-e2e-cross",
+		"initialBalance": map[string]string{
+			"amount":   "200.00",
+			"currency": "BRL",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	walletResult := ReadBody(walletResp)
+	walletResp.Body.Close()
+	walletID := walletResult["walletId"].(string)
+	t.Logf("wallet created: %s", walletID)
+
+	httpBetResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-cross-http-bet",
+		"playerId":              "player-e2e-cross",
+		"walletId":              walletID,
+		"roundId":               "round-cross",
+		"kind":                  "BET",
+		"money":                 map[string]string{"amount": "30.00", "currency": "BRL"},
+	})
+	if err != nil {
+		t.Fatalf("HTTP BET: %v", err)
+	}
+	httpBetResult := ReadBody(httpBetResp)
+	httpBetResp.Body.Close()
+	t.Logf("HTTP BET: status=%v", httpBetResult["status"])
+
+	if httpBetResult["status"] != "PROCESSED" {
+		t.Fatalf("expected HTTP BET PROCESSED, got %v", httpBetResult["status"])
+	}
+
+	sqsBetBody, _ := json.Marshal(map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-cross-sqs-bet",
+		"playerId":              "player-e2e-cross",
+		"walletId":              walletID,
+		"roundId":               "round-cross",
+		"kind":                  "BET",
+		"money":                  map[string]string{"amount": "20.00", "currency": "BRL"},
+	})
+	_, err = env.SendSQSMessage(t.Context(), string(sqsBetBody))
+	if err != nil {
+		t.Fatalf("send SQS BET: %v", err)
+	}
+	t.Log("SQS BET message sent, waiting for worker to process...")
+
+	time.Sleep(10 * time.Second)
+
+	walletGetResp, err := env.DoRequest("GET", "/wallets/"+walletID, token, nil)
+	if err != nil {
+		t.Fatalf("GET wallet: %v", err)
+	}
+	walletGetResult := ReadBody(walletGetResp)
+	walletGetResp.Body.Close()
+
+	balanceStr := walletGetResult["balance"].(map[string]interface{})["amount"].(string)
+	t.Logf("final balance after HTTP BET (30) + SQS BET (20): %s", balanceStr)
+
+	expectedBalance := "150.00"
+	if balanceStr != expectedBalance {
+		t.Errorf("balance mismatch: got %s, want %s (200 - 30 HTTP - 20 SQS)", balanceStr, expectedBalance)
+	}
+
+	httpWinResp, err := env.DoRequest("POST", "/wagering/transactions", token, map[string]interface{}{
+		"providerId":            "provider1",
+		"externalTransactionId": "e2e-cross-http-win",
+		"playerId":              "player-e2e-cross",
+		"walletId":              walletID,
+		"roundId":               "round-cross",
+		"kind":                  "WIN",
+		"money":                 map[string]string{"amount": "10.00", "currency": "BRL"},
+	})
+	if err != nil {
+		t.Fatalf("HTTP WIN: %v", err)
+	}
+	httpWinResult := ReadBody(httpWinResp)
+	httpWinResp.Body.Close()
+	t.Logf("HTTP WIN: status=%v", httpWinResult["status"])
+
+	walletGetResp2, err := env.DoRequest("GET", "/wallets/"+walletID, token, nil)
+	if err != nil {
+		t.Fatalf("GET wallet after WIN: %v", err)
+	}
+	walletGetResult2 := ReadBody(walletGetResp2)
+	walletGetResp2.Body.Close()
+
+	balanceStr2 := walletGetResult2["balance"].(map[string]interface{})["amount"].(string)
+	t.Logf("final balance after WIN: %s", balanceStr2)
+	if balanceStr2 != "160.00" {
+		t.Errorf("final balance: got %s, want 160.00 (150 + 10 WIN)", balanceStr2)
+	}
+}

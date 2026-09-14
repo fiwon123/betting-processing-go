@@ -966,6 +966,218 @@ func TestRestart_ConsistencyVerification(t *testing.T) {
 	t.Logf("balance verified: %d (200000 - 3000 BET + 2000 WIN)", finalBalance)
 }
 
+func TestLedgerImmutability_UpdateAndDeleteBlocked(t *testing.T) {
+	pool := mustPool(t)
+	walletID := "00000000-0000-0000-0000-0000000000B0"
+	playerID := "00000000-0000-0000-0000-0000000000B1"
+	providerID := "prov-ledger-immut"
+	seedWallet(t, pool, walletID, 50000)
+
+	svc := createTestService(t, pool)
+	ctx := context.Background()
+
+	betResult, err := svc.ProcessTransaction(ctx, wagertransaction.Request{
+		ProviderID:            providerID,
+		ExternalTransactionID: "bet-ledger-immut-1",
+		PlayerID:              playerID,
+		WalletID:              walletID,
+		Kind:                  "BET",
+		Money:                 wagertransaction.MoneyDTO{Amount: "10.00", Currency: "BRL"},
+	}, "", "")
+	if err != nil {
+		t.Fatalf("process BET: %v", err)
+	}
+
+	var ledgerID string
+	err = pool.QueryRow(ctx,
+		`SELECT id FROM wallet_ledger_entries WHERE wallet_id = $1 AND transaction_id = $2`,
+		walletID, betResult.TransactionID,
+	).Scan(&ledgerID)
+	if err != nil {
+		t.Fatalf("find ledger entry: %v", err)
+	}
+
+	_, err = pool.Exec(ctx,
+		`UPDATE wallet_ledger_entries SET amount = 999 WHERE id = $1`, ledgerID,
+	)
+	if err == nil {
+		t.Error("expected UPDATE to be blocked by trigger, but it succeeded")
+	}
+
+	_, err = pool.Exec(ctx,
+		`DELETE FROM wallet_ledger_entries WHERE id = $1`, ledgerID,
+	)
+	if err == nil {
+		t.Error("expected DELETE to be blocked by trigger, but it succeeded")
+	}
+
+	var intactAmount int64
+	err = pool.QueryRow(ctx,
+		`SELECT amount FROM wallet_ledger_entries WHERE id = $1`, ledgerID,
+	).Scan(&intactAmount)
+	if err != nil {
+		t.Fatalf("read ledger entry after failed mutations: %v", err)
+	}
+	if intactAmount != 1000 {
+		t.Errorf("ledger entry amount was mutated: got %d, want 1000", intactAmount)
+	}
+}
+
+func TestCrashBetweenCommitAndSQSDelete_Redelivery(t *testing.T) {
+	pool := mustPool(t)
+	walletID := "00000000-0000-0000-0000-0000000000C0"
+	playerID := "00000000-0000-0000-0000-0000000000C1"
+	seedWallet(t, pool, walletID, 100000)
+
+	svc := createTestService(t, pool)
+	ctx := context.Background()
+
+	req := wagertransaction.Request{
+		ProviderID:            "prov-crash-redeliver",
+		ExternalTransactionID: "ext-crash-1",
+		PlayerID:              playerID,
+		WalletID:              walletID,
+		Kind:                  "BET",
+		Money:                 wagertransaction.MoneyDTO{Amount: "25.00", Currency: "BRL"},
+	}
+	idempotencyKey := "prov-crash-redeliver:ext-crash-1"
+	messageID := "sqs-msg-crash-001"
+
+	result1, err := svc.ProcessTransaction(ctx, req, idempotencyKey, messageID)
+	if err != nil {
+		t.Fatalf("first delivery (simulated commit): %v", err)
+	}
+	t.Logf("first delivery committed: tx=%s status=%s", result1.TransactionID, result1.Status)
+
+	result2, err := svc.ProcessTransaction(ctx, req, idempotencyKey, messageID)
+	if err != nil {
+		t.Fatalf("redelivery after crash: %v", err)
+	}
+	if result2.TransactionID != result1.TransactionID {
+		t.Errorf("redelivery returned different tx ID: %s vs %s", result2.TransactionID, result1.TransactionID)
+	}
+	if !result2.IdempotentReplay {
+		t.Error("expected IdempotentReplay=true on redelivery after crash")
+	}
+
+	var finalBalance int64
+	if err := pool.QueryRow(ctx, `SELECT balance FROM wallets WHERE id = $1`, walletID).Scan(&finalBalance); err != nil {
+		t.Fatalf("read balance: %v", err)
+	}
+	expectedBalance := int64(100000) - 2500
+	if finalBalance != expectedBalance {
+		t.Errorf("balance mismatch: got %d, want %d (only one debit expected)", finalBalance, expectedBalance)
+	}
+
+	var debitCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id = $1 AND direction = 'DEBIT' AND transaction_id = $2`,
+		walletID, result1.TransactionID,
+	).Scan(&debitCount); err != nil {
+		t.Fatalf("count debits: %v", err)
+	}
+	if debitCount != 1 {
+		t.Errorf("expected exactly 1 DEBIT, got %d", debitCount)
+	}
+}
+
+func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
+	pool := mustPool(t)
+	walletID := "00000000-0000-0000-0000-0000000000D0"
+	playerID := "00000000-0000-0000-0000-0000000000D1"
+	providerID := "prov-async-pending"
+	seedWallet(t, pool, walletID, 100000)
+
+	svc1 := createTestService(t, pool)
+	svc2 := createTestService(t, pool)
+	ctx := context.Background()
+
+	betResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+		ProviderID:            providerID,
+		ExternalTransactionID: "bet-async-pending-1",
+		PlayerID:              playerID,
+		WalletID:              walletID,
+		Kind:                  "BET",
+		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+	}, "", "")
+	if err != nil {
+		t.Fatalf("process BET: %v", err)
+	}
+
+	_, err = pool.Exec(ctx,
+		`UPDATE wager_transactions SET status = 'PENDING', processed_at = NULL WHERE id = $1`,
+		betResult.TransactionID,
+	)
+	if err != nil {
+		t.Fatalf("set BET to PENDING: %v", err)
+	}
+
+	refundResult, err := svc1.ProcessTransaction(ctx, wagertransaction.Request{
+		ProviderID:            providerID,
+		ExternalTransactionID: "refund-async-pending-1",
+		PlayerID:              playerID,
+		WalletID:              walletID,
+		Kind:                  "REFUND",
+		Money:                 wagertransaction.MoneyDTO{Amount: "20.00", Currency: "BRL"},
+		ReferenceExternalID:   "bet-async-pending-1",
+	}, "", "")
+	if err != nil {
+		t.Fatalf("process REFUND: %v", err)
+	}
+	if refundResult.Status != "PENDING_REFERENCE" {
+		t.Fatalf("expected PENDING_REFERENCE, got %s", refundResult.Status)
+	}
+
+	_, err = pool.Exec(ctx,
+		`UPDATE wager_transactions SET status = 'PROCESSED', processed_at = now() WHERE id = $1`,
+		betResult.TransactionID,
+	)
+	if err != nil {
+		t.Fatalf("set BET to PROCESSED: %v", err)
+	}
+
+	var resolveErr1, resolveErr2 error
+	var resolveResult1, resolveResult2 *wagertransaction.ProcessResult
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resolveResult1, resolveErr1 = svc1.ResolvePendingReference(ctx, refundResult.TransactionID)
+	}()
+	go func() {
+		defer wg.Done()
+		resolveResult2, resolveErr2 = svc2.ResolvePendingReference(ctx, refundResult.TransactionID)
+	}()
+	wg.Wait()
+
+	if resolveErr1 != nil && resolveErr2 != nil {
+		t.Fatalf("both instances errored: svc1=%v, svc2=%v", resolveErr1, resolveErr2)
+	}
+
+	processedCount := 0
+	if resolveErr1 == nil && resolveResult1.Status == "PROCESSED" {
+		processedCount++
+	}
+	if resolveErr2 == nil && resolveResult2.Status == "PROCESSED" {
+		processedCount++
+	}
+
+	t.Logf("resolved by %d instance(s)", processedCount)
+	if processedCount != 1 {
+		t.Errorf("expected exactly 1 instance to resolve, got %d", processedCount)
+	}
+
+	var finalBalance int64
+	if err := pool.QueryRow(ctx, `SELECT balance FROM wallets WHERE id = $1`, walletID).Scan(&finalBalance); err != nil {
+		t.Fatalf("read balance: %v", err)
+	}
+	expectedBalance := int64(100000) + 2000
+	if finalBalance != expectedBalance {
+		t.Errorf("balance mismatch: got %d, want %d (credit should happen exactly once)", finalBalance, expectedBalance)
+	}
+}
+
 func TestReversalInsufficientBalance_DifferentCode(t *testing.T) {
 	pool := mustPool(t)
 	walletID := "00000000-0000-0000-0000-0000000000A0"

@@ -9,6 +9,7 @@ import (
 
 	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
+	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
 )
 
@@ -199,6 +200,48 @@ func TestOutboxPublisher_NoDoublePublish(t *testing.T) {
 		if !repo.published[e.ID] {
 			t.Errorf("event %s was not marked as published", e.ID)
 		}
+	}
+}
+
+func TestOutboxPublisher_DLQMetricIncremented(t *testing.T) {
+	events := []*wagertransaction.OutboxEvent{
+		{ID: "evt-dlq-1", EventType: "Test", AggregateType: "Test", AggregateID: "agg-dlq-1", Payload: []byte(`{}`), Attempts: 5},
+		{ID: "evt-dlq-2", EventType: "Test", AggregateType: "Test", AggregateID: "agg-dlq-2", Payload: []byte(`{}`), Attempts: 4},
+	}
+	repo := newMockOutboxRepo(events)
+	log := zap.NewNop()
+
+	publishFunc := func(_ context.Context, _, _, _ string, _ []byte) error {
+		return nil
+	}
+
+	publisher := NewOutboxPublisher(repo, publishFunc, log, sharedMetrics)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := publisher.Start(ctx)
+	if err != nil {
+		t.Fatalf("publisher stopped with error: %v", err)
+	}
+
+	var dlqVal float64
+	if sharedMetrics.DLQTotal != nil {
+		d := &dto.Metric{}
+		_ = sharedMetrics.DLQTotal.Write(d)
+		dlqVal = d.GetCounter().GetValue()
+	}
+	if dlqVal < 1 {
+		t.Errorf("expected DLQTotal >= 1 after max attempts exceeded, got %f", dlqVal)
+	}
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if repo.published["evt-dlq-1"] {
+		t.Error("event at max attempts should not be published")
+	}
+	if !repo.published["evt-dlq-2"] {
+		t.Error("event below max attempts should be published")
 	}
 }
 
