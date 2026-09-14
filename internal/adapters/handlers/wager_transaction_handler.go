@@ -61,6 +61,25 @@ func (h *WagerTransactionHandler) RegisterRoutes(r chi.Router) {
 	})
 }
 
+// Create godoc
+// @Summary Process a wager transaction
+// @Description Processes BET, WIN, LOSS, REFUND, or ROLLBACK transactions. Requires Idempotency-Key header.
+// @Tags wagering
+// @Accept json
+// @Produce json
+// @Param Idempotency-Key header string true "Idempotency key (provider:externalId)"
+// @Param request body WagerTransactionRequest true "Wager transaction request"
+// @Success 201 {object} WagerTransactionResponse
+// @Success 200 {object} WagerTransactionResponse
+// @Success 202 {object} WagerTransactionResponse
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 422 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Security BearerAuth
+// @Router /wagering/transactions [post]
 func (h *WagerTransactionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 	if strings.TrimSpace(idempotencyKey) == "" {
@@ -216,6 +235,18 @@ func (h *WagerTransactionHandler) Create(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// Get godoc
+// @Summary Get a wager transaction by ID
+// @Description Retrieves a wager transaction by internal ID. Provider isolation enforced.
+// @Tags wagering
+// @Produce json
+// @Param transactionId path string true "Transaction ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /wagering/transactions/{transactionId} [get]
 func (h *WagerTransactionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	txID := chi.URLParam(r, "transactionId")
 	if strings.TrimSpace(txID) == "" {
@@ -261,6 +292,19 @@ func (h *WagerTransactionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetByProviderAndExternalID godoc
+// @Summary Get a wager transaction by provider and external ID
+// @Description Retrieves a wager transaction by provider ID and external transaction ID
+// @Tags wagering
+// @Produce json
+// @Param providerId path string true "Provider ID"
+// @Param externalTransactionId path string true "External transaction ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /providers/{providerId}/wagering/transactions/{externalTransactionId} [get]
 func (h *WagerTransactionHandler) GetByProviderAndExternalID(w http.ResponseWriter, r *http.Request) {
 	providerID := chi.URLParam(r, "providerId")
 	externalID := chi.URLParam(r, "externalTransactionId")

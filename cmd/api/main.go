@@ -1,3 +1,21 @@
+// @title Betting Processing API
+// @version 1.0
+// @description Backend service for processing betting transactions with distributed messaging
+// @description ## Overview
+// @description This service processes wager transactions (BET, WIN, LOSS, REFUND, ROLLBACK) between game providers and player wallets.
+// @description It receives requests via SQS, applies business rules, atomically mutates wallet balances, and publishes domain events.
+// @description ## Authentication
+// @description Protected endpoints require a Bearer JWT token from Keycloak (OAuth2/OIDC).
+// @description The JWT must contain a `provider_id` claim. Use `grant_type=password` to obtain tokens.
+// @description ## Idempotency
+// @description All wager transaction requests require an `Idempotency-Key` header (format: `provider:externalId`).
+// @description Duplicate requests return the original result without reprocessing.
+// @host localhost:8080
+// @BasePath /
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Enter "Bearer {token}"
 package main
 
 import (
@@ -8,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/fiwon123/betting-processing-go/docs"
 	"github.com/fiwon123/betting-processing-go/internal/adapters/handlers"
 	"github.com/fiwon123/betting-processing-go/internal/adapters/middleware"
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
@@ -19,6 +38,8 @@ import (
 	"github.com/fiwon123/betting-processing-go/internal/wallet"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/swaggo/swag"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
@@ -53,6 +74,22 @@ func (h *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func NewHTTPServer(lc fx.Lifecycle, router chi.Router, log *zap.Logger, cfg cfg.Config) *http.Server {
 	router.Handle("/metrics", promhttp.Handler())
+
+	if cfg.Environment == "development" {
+		router.Get("/docs/*", httpSwagger.Handler(
+			httpSwagger.URL("/docs/specs"),
+		))
+		router.Get("/docs/specs", func(w http.ResponseWriter, r *http.Request) {
+			doc, err := swag.ReadDoc("swagger")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(doc))
+		})
+		log.Info("Swagger UI enabled at /docs/")
+	}
 
 	var handler http.Handler = router
 

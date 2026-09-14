@@ -51,6 +51,19 @@ func (h *WalletHandler) RegisterRoutes(r chi.Router) {
 	})
 }
 
+// Create godoc
+// @Summary Create a wallet
+// @Description Creates a new wallet for the authenticated provider with an initial balance
+// @Tags wallets
+// @Accept json
+// @Produce json
+// @Param request body WalletCreateRequest true "Wallet creation request"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Security BearerAuth
+// @Router /wallets [post]
 func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
 	providerID, ok := middleware.GetProviderID(r.Context())
 	if !ok {
@@ -120,6 +133,18 @@ func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Get godoc
+// @Summary Get a wallet
+// @Description Retrieves a wallet by ID. Provider isolation enforced.
+// @Tags wallets
+// @Produce json
+// @Param walletId path string true "Wallet ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /wallets/{walletId} [get]
 func (h *WalletHandler) Get(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "walletId")
 	if strings.TrimSpace(walletID) == "" {
@@ -156,6 +181,20 @@ func (h *WalletHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetLedger godoc
+// @Summary Get wallet ledger entries
+// @Description Returns paginated ledger entries for a wallet
+// @Tags wallets
+// @Produce json
+// @Param walletId path string true "Wallet ID"
+// @Param cursor query string false "Pagination cursor"
+// @Param limit query int false "Number of entries to return (default 50)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /wallets/{walletId}/ledger [get]
 func (h *WalletHandler) GetLedger(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "walletId")
 	if strings.TrimSpace(walletID) == "" {
@@ -235,6 +274,18 @@ func (h *WalletHandler) GetLedger(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Reconcile godoc
+// @Summary Reconcile wallet balance
+// @Description Computes wallet balance from ledger entries and compares with stored balance
+// @Tags wallets
+// @Produce json
+// @Param walletId path string true "Wallet ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /wallets/{walletId}/reconciliation [post]
 func (h *WalletHandler) Reconcile(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "walletId")
 	if strings.TrimSpace(walletID) == "" {

@@ -49,12 +49,27 @@ func (h *HealthHandler) RegisterRoutes(r chi.Router) {
 	})
 }
 
+// live godoc
+// @Summary Liveness probe
+// @Description Always returns 200 if the service is running
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /health/live [get]
 func (h *HealthHandler) live(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
 }
 
+// ready godoc
+// @Summary Readiness probe
+// @Description Checks PostgreSQL and SQS connectivity
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {object} map[string]interface{}
+// @Router /health/ready [get]
 func (h *HealthHandler) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()

@@ -1,0 +1,445 @@
+basePath: /
+definitions:
+  handlers.MoneyDTO:
+    properties:
+      amount:
+        type: string
+      currency:
+        type: string
+    type: object
+  handlers.WagerTransactionRequest:
+    properties:
+      externalTransactionId:
+        type: string
+      gameId:
+        type: string
+      kind:
+        type: string
+      money:
+        $ref: '#/definitions/handlers.MoneyDTO'
+      playerId:
+        type: string
+      providerId:
+        type: string
+      referenceExternalTransactionId:
+        type: string
+      roundId:
+        type: string
+      walletId:
+        type: string
+    type: object
+  handlers.WagerTransactionResponse:
+    properties:
+      balance:
+        $ref: '#/definitions/handlers.MoneyDTO'
+      idempotentReplay:
+        type: boolean
+      status:
+        type: string
+      transactionId:
+        type: string
+    type: object
+  handlers.WalletCreateRequest:
+    properties:
+      initialBalance:
+        properties:
+          amount:
+            type: string
+          currency:
+            type: string
+        type: object
+      playerId:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: |-
+    Backend service for processing betting transactions with distributed messaging
+    ## Overview
+    This service processes wager transactions (BET, WIN, LOSS, REFUND, ROLLBACK) between game providers and player wallets.
+    It receives requests via SQS, applies business rules, atomically mutates wallet balances, and publishes domain events.
+    ## Authentication
+    Protected endpoints require a Bearer JWT token from Keycloak (OAuth2/OIDC).
+    The JWT must contain a `provider_id` claim. Use `grant_type=password` to obtain tokens.
+    ## Idempotency
+    All wager transaction requests require an `Idempotency-Key` header (format: `provider:externalId`).
+    Duplicate requests return the original result without reprocessing.
+  title: Betting Processing API
+  version: "1.0"
+paths:
+  /health/live:
+    get:
+      description: Always returns 200 if the service is running
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness probe
+      tags:
+      - health
+  /health/ready:
+    get:
+      description: Checks PostgreSQL and SQS connectivity
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Readiness probe
+      tags:
+      - health
+  /providers/{providerId}/wagering/transactions/{externalTransactionId}:
+    get:
+      description: Retrieves a wager transaction by provider ID and external transaction
+        ID
+      parameters:
+      - description: Provider ID
+        in: path
+        name: providerId
+        required: true
+        type: string
+      - description: External transaction ID
+        in: path
+        name: externalTransactionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get a wager transaction by provider and external ID
+      tags:
+      - wagering
+  /wagering/transactions:
+    post:
+      consumes:
+      - application/json
+      description: Processes BET, WIN, LOSS, REFUND, or ROLLBACK transactions. Requires
+        Idempotency-Key header.
+      parameters:
+      - description: Idempotency key (provider:externalId)
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Wager transaction request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.WagerTransactionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.WagerTransactionResponse'
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.WagerTransactionResponse'
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/handlers.WagerTransactionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Process a wager transaction
+      tags:
+      - wagering
+  /wagering/transactions/{transactionId}:
+    get:
+      description: Retrieves a wager transaction by internal ID. Provider isolation
+        enforced.
+      parameters:
+      - description: Transaction ID
+        in: path
+        name: transactionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get a wager transaction by ID
+      tags:
+      - wagering
+  /wallets:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new wallet for the authenticated provider with an initial
+        balance
+      parameters:
+      - description: Wallet creation request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.WalletCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create a wallet
+      tags:
+      - wallets
+  /wallets/{walletId}:
+    get:
+      description: Retrieves a wallet by ID. Provider isolation enforced.
+      parameters:
+      - description: Wallet ID
+        in: path
+        name: walletId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get a wallet
+      tags:
+      - wallets
+  /wallets/{walletId}/ledger:
+    get:
+      description: Returns paginated ledger entries for a wallet
+      parameters:
+      - description: Wallet ID
+        in: path
+        name: walletId
+        required: true
+        type: string
+      - description: Pagination cursor
+        in: query
+        name: cursor
+        type: string
+      - description: Number of entries to return (default 50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get wallet ledger entries
+      tags:
+      - wallets
+  /wallets/{walletId}/reconciliation:
+    post:
+      description: Computes wallet balance from ledger entries and compares with stored
+        balance
+      parameters:
+      - description: Wallet ID
+        in: path
+        name: walletId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Reconcile wallet balance
+      tags:
+      - wallets
+securityDefinitions:
+  BearerAuth:
+    description: Enter "Bearer {token}"
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
