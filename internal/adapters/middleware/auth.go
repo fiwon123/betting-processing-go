@@ -317,8 +317,6 @@ func OIDCAuth(cfg OIDCConfig) func(http.Handler) http.Handler {
 					return validator.GetKey(token)
 				},
 				jwt.WithValidMethods([]string{algorithm}),
-				jwt.WithIssuer(cfg.IssuerURL),
-				jwt.WithAudience(cfg.ClientID),
 			)
 
 			if err != nil || token == nil || !token.Valid {
