@@ -1,7 +1,7 @@
 include .env
 export
 
-.PHONY: run fmt test test-race test-full
+.PHONY: run fmt test test_race test_full is_live is_ready
 
 run:
 	go run ./cmd/api
@@ -12,16 +12,16 @@ fmt:
 test:
 	go test ./...
 
-test-race:
+test_race:
 	go test -race ./...
 
-test-full:
+test_full:
 	go test -race -cover ./...
 
-test_health_live:
+is_live:
 	curl -i http://localhost:8080/health/live
 
-test_health_ready:
+is_ready:
 	curl -i http://localhost:8080/health/ready
 
 ## Migrations

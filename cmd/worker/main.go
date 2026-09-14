@@ -38,8 +38,16 @@ func main() {
 			db.NewOutboxRepository,
 			db.NewWalletRepository,
 			db.NewLedgerRepository,
+
 			wallet.NewService,
 			wagertransaction.NewService,
+
+			func(r *db.WagerTransactionRepository) wagertransaction.Repository { return r },
+			func(r *db.InboxRepository) wagertransaction.InboxRepository       { return r },
+			func(r *db.OutboxRepository) wagertransaction.OutboxRepository     { return r },
+			func(r *db.WalletRepository) wallet.Repository                     { return r },
+			func(r *db.LedgerRepository) wallet.LedgerRepository               { return r },
+			func(s *wallet.Service) wagertransaction.WalletService             { return s },
 			metrics.New,
 		),
 

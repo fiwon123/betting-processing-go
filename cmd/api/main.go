@@ -117,13 +117,7 @@ func NewDatabaseConfig(c cfg.Config) cfg.DatabaseConfig {
 	return c.Database
 }
 
-func NewWalletServiceAdapter(svc *wallet.Service) handlers.WalletService {
-	return svc
-}
 
-func NewWagerTransactionServiceAdapter(svc *wagertransaction.Service) handlers.WagerTransactionService {
-	return svc
-}
 
 func main() {
 	fx.New(
@@ -154,10 +148,16 @@ func main() {
 			db.NewOutboxRepository,
 
 			wallet.NewService,
-			fx.Annotate(
-				wagertransaction.NewService,
-				fx.As(new(handlers.WagerTransactionService)),
-			),
+			wagertransaction.NewService,
+
+			func(r *db.WalletRepository) wallet.Repository                    { return r },
+			func(r *db.LedgerRepository) wallet.LedgerRepository              { return r },
+			func(r *db.WagerTransactionRepository) wagertransaction.Repository { return r },
+			func(r *db.InboxRepository) wagertransaction.InboxRepository       { return r },
+			func(r *db.OutboxRepository) wagertransaction.OutboxRepository     { return r },
+			func(s *wallet.Service) handlers.WalletService                     { return s },
+			func(s *wallet.Service) wagertransaction.WalletService             { return s },
+			func(s *wagertransaction.Service) handlers.WagerTransactionService { return s },
 
 			fx.Annotate(
 				handlers.NewHealthHandler,
