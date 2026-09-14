@@ -33,7 +33,7 @@ func (r *testRepo) FindPending(_ context.Context, _ int) ([]*Transaction, error)
 func (r *testRepo) FindPendingReferences(_ context.Context, _ int) ([]*Transaction, error) {
 	return nil, nil
 }
-func (r *testRepo) HasSuccessfulReversal(_ context.Context, _ string, _ TransactionType) (bool, error) {
+func (r *testRepo) HasSuccessfulReversal(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
 func (r *testRepo) IncrementRefAttempts(_ context.Context, _ string) error { return nil }
@@ -122,8 +122,8 @@ func (r *testOutboxRepo) CreateEvents(_ context.Context, _ []OutboxEvent) error 
 func (r *testOutboxRepo) FindPending(_ context.Context, _ int) ([]*OutboxEvent, error) {
 	return nil, nil
 }
-func (r *testOutboxRepo) MarkPublished(_ context.Context, _ string) error     { return nil }
-func (r *testOutboxRepo) IncrementAttempts(_ context.Context, _ string) error { return nil }
+func (r *testOutboxRepo) MarkPublished(_ context.Context, _ string) error               { return nil }
+func (r *testOutboxRepo) IncrementAttempts(_ context.Context, _ string, _ string) error { return nil }
 
 func newTestOutboxRepo(_ *pgxpool.Pool) *testOutboxRepo {
 	return &testOutboxRepo{}

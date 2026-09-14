@@ -43,11 +43,11 @@ func main() {
 			wagertransaction.NewService,
 
 			func(r *db.WagerTransactionRepository) wagertransaction.Repository { return r },
-			func(r *db.InboxRepository) wagertransaction.InboxRepository       { return r },
-			func(r *db.OutboxRepository) wagertransaction.OutboxRepository     { return r },
-			func(r *db.WalletRepository) wallet.Repository                     { return r },
-			func(r *db.LedgerRepository) wallet.LedgerRepository               { return r },
-			func(s *wallet.Service) wagertransaction.WalletService             { return s },
+			func(r *db.InboxRepository) wagertransaction.InboxRepository { return r },
+			func(r *db.OutboxRepository) wagertransaction.OutboxRepository { return r },
+			func(r *db.WalletRepository) wallet.Repository { return r },
+			func(r *db.LedgerRepository) wallet.LedgerRepository { return r },
+			func(s *wallet.Service) wagertransaction.WalletService { return s },
 			metrics.New,
 		),
 
@@ -59,6 +59,7 @@ func main() {
 			outboxRepo *db.OutboxRepository,
 			repo *db.WagerTransactionRepository,
 			log *zap.Logger,
+			m *metrics.Metrics,
 		) {
 			ctx, cancel := context.WithCancel(context.Background())
 
@@ -83,6 +84,7 @@ func main() {
 				outboxRepo,
 				workers.SQSPublishFunc(client, outboundURL),
 				log,
+				m,
 			)
 
 			var wg sync.WaitGroup

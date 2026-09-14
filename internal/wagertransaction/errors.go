@@ -1,6 +1,10 @@
 package wagertransaction
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
 
 var (
 	ErrInvalidTransactionID   = errors.New("invalid_transaction_id")
@@ -28,6 +32,7 @@ var (
 	ErrRoundMismatch          = errors.New("round_mismatch")
 	ErrReversalValueMismatch  = errors.New("reversal_value_mismatch")
 	ErrMaxRetriesExceeded     = errors.New("max_retries_exceeded")
+	ErrIdempotentDuplicate    = errors.New("idempotent_duplicate")
 )
 
 // IsTerminalBusinessError returns true for errors that represent definitive
@@ -53,5 +58,11 @@ func IsTerminalBusinessError(err error) bool {
 		errors.Is(err, ErrCurrencyMismatch) ||
 		errors.Is(err, ErrRoundMismatch) ||
 		errors.Is(err, ErrReversalValueMismatch) ||
-		errors.Is(err, ErrInvalidStateTransition)
+		errors.Is(err, ErrInvalidStateTransition) ||
+		errors.Is(err, ErrIdempotentDuplicate)
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

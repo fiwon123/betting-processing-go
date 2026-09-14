@@ -1,7 +1,9 @@
 include .env
 export
 
-.PHONY: run fmt test test_race test_full is_live is_ready
+.PHONY: run fmt test test_race test_full test_unit test_integration test_e2e test_all \
+        test_e2e_up test_e2e_down \
+        is_live is_ready
 
 run:
 	go run ./cmd/api
@@ -17,6 +19,23 @@ test_race:
 
 test_full:
 	go test -race -cover ./...
+
+test_unit:
+	go test -race -count=1 ./...
+
+test_integration:
+	@echo "Running integration tests (requires TEST_DATABASE_URL)..."
+	@echo "Start test DB: docker compose -f docker-compose.test.yml up -d postgres migrate"
+	@echo "Then set: export TEST_DATABASE_URL=postgresql://api_test:api_test@localhost:5433/api_test?sslmode=disable"
+	go test -v -race -count=1 -tags=integration -timeout=300s ./...
+
+test_e2e:
+	@echo "Running e2e tests (full stack)..."
+	docker compose -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
+	docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
+	docker compose -f docker-compose.test.yml down -v --remove-orphans
+
+test_all: test_unit test_e2e
 
 is_live:
 	curl -i http://localhost:8080/health/live

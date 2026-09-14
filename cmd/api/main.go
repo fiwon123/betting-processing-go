@@ -117,8 +117,6 @@ func NewDatabaseConfig(c cfg.Config) cfg.DatabaseConfig {
 	return c.Database
 }
 
-
-
 func main() {
 	fx.New(
 		fx.WithLogger(func(log *zap.Logger) fxevent.Logger {
@@ -150,13 +148,14 @@ func main() {
 			wallet.NewService,
 			wagertransaction.NewService,
 
-			func(r *db.WalletRepository) wallet.Repository                    { return r },
-			func(r *db.LedgerRepository) wallet.LedgerRepository              { return r },
+			func(r *db.WalletRepository) wallet.Repository { return r },
+			func(r *db.LedgerRepository) wallet.LedgerRepository { return r },
 			func(r *db.WagerTransactionRepository) wagertransaction.Repository { return r },
-			func(r *db.InboxRepository) wagertransaction.InboxRepository       { return r },
-			func(r *db.OutboxRepository) wagertransaction.OutboxRepository     { return r },
-			func(s *wallet.Service) handlers.WalletService                     { return s },
-			func(s *wallet.Service) wagertransaction.WalletService             { return s },
+			func(r *db.InboxRepository) wagertransaction.InboxRepository { return r },
+			func(r *db.OutboxRepository) wagertransaction.OutboxRepository { return r },
+			func(s *wallet.Service) handlers.WalletService { return s },
+			func(s *wallet.Service) handlers.WalletLookup { return s },
+			func(s *wallet.Service) wagertransaction.WalletService { return s },
 			func(s *wagertransaction.Service) handlers.WagerTransactionService { return s },
 
 			fx.Annotate(

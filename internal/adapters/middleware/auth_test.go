@@ -10,10 +10,10 @@ import (
 
 func TestGetProviderID(t *testing.T) {
 	tests := []struct {
-		name     string
-		ctx      context.Context
-		wantID   string
-		wantOK   bool
+		name   string
+		ctx    context.Context
+		wantID string
+		wantOK bool
 	}{
 		{
 			name:   "returns provider_id when set",

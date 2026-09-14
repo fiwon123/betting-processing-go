@@ -9,7 +9,14 @@ import (
 
 	"github.com/fiwon123/betting-processing-go/internal/adapters/middleware"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
+	"github.com/fiwon123/betting-processing-go/internal/wallet"
 )
+
+type mockWalletLookup struct{}
+
+func (m *mockWalletLookup) GetWallet(_ context.Context, _ string) (*wallet.Wallet, error) {
+	return nil, wallet.ErrWalletNotFound
+}
 
 func withProviderID(ctx context.Context, providerID string) context.Context {
 	return context.WithValue(ctx, middleware.ProviderIDKey, middleware.ProviderID(providerID))
@@ -41,7 +48,7 @@ func TestWalletHandlerCreateRejectsMissingProviderID(t *testing.T) {
 }
 
 func TestWagerTransactionHandlerCreateRejectsMissingIdempotencyKey(t *testing.T) {
-	h := NewWagerTransactionHandler(nil)
+	h := NewWagerTransactionHandler(nil, &mockWalletLookup{})
 	req := httptest.NewRequest(http.MethodPost, "/wagering/transactions", bytes.NewBufferString(`{}`))
 	w := httptest.NewRecorder()
 
@@ -53,7 +60,7 @@ func TestWagerTransactionHandlerCreateRejectsMissingIdempotencyKey(t *testing.T)
 }
 
 func TestWagerTransactionHandlerCreateRejectsInvalidJSON(t *testing.T) {
-	h := NewWagerTransactionHandler(nil)
+	h := NewWagerTransactionHandler(nil, &mockWalletLookup{})
 	req := httptest.NewRequest(http.MethodPost, "/wagering/transactions", bytes.NewBufferString(`{`))
 	req.Header.Set("Idempotency-Key", "test-key")
 	w := httptest.NewRecorder()
@@ -72,7 +79,7 @@ func TestWagerTransactionHandlerCreateRejectsMissingFields(t *testing.T) {
 			Status:        "PROCESSED",
 		},
 	}
-	h := NewWagerTransactionHandler(mock)
+	h := NewWagerTransactionHandler(mock, &mockWalletLookup{})
 	body := `{"providerId":"p1","externalTransactionId":"e1","playerId":"pl1","walletId":"w1","kind":"BET","money":{"amount":"10.00","currency":"BRL"}}`
 	req := httptest.NewRequest(http.MethodPost, "/wagering/transactions", bytes.NewBufferString(body))
 	req.Header.Set("Idempotency-Key", "p1:e1")
@@ -110,7 +117,7 @@ func TestWagerTransactionHandlerCreateWithMockService(t *testing.T) {
 		},
 	}
 
-	h := NewWagerTransactionHandler(mock)
+	h := NewWagerTransactionHandler(mock, &mockWalletLookup{})
 
 	body := `{
 		"providerId": "provider-a",

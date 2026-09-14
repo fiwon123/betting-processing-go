@@ -19,8 +19,13 @@ type WagerTransactionService interface {
 	FindByProviderAndExternalID(ctx context.Context, providerID, externalID string) (*wagertransaction.Transaction, error)
 }
 
+type WalletLookup interface {
+	GetWallet(ctx context.Context, id string) (*wallet.Wallet, error)
+}
+
 type WagerTransactionHandler struct {
-	service WagerTransactionService
+	service    WagerTransactionService
+	walletLook WalletLookup
 }
 
 type WagerTransactionRequest struct {
@@ -42,8 +47,8 @@ type WagerTransactionResponse struct {
 	IdempotentReplay bool     `json:"idempotentReplay"`
 }
 
-func NewWagerTransactionHandler(service WagerTransactionService) *WagerTransactionHandler {
-	return &WagerTransactionHandler{service: service}
+func NewWagerTransactionHandler(service WagerTransactionService, walletLook WalletLookup) *WagerTransactionHandler {
+	return &WagerTransactionHandler{service: service, walletLook: walletLook}
 }
 
 func (h *WagerTransactionHandler) RegisterRoutes(r chi.Router) {
@@ -92,6 +97,22 @@ func (h *WagerTransactionHandler) Create(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error":   "provider_mismatch",
 				"message": "providerId in body does not match authenticated provider",
+			})
+			return
+		}
+
+		wallet, err := h.walletLook.GetWallet(r.Context(), req.WalletID)
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error":   "wallet_not_found",
+				"message": "wallet not found",
+			})
+			return
+		}
+		if wallet.ProviderID() != providerID {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error":   "provider_mismatch",
+				"message": "wallet belongs to another provider",
 			})
 			return
 		}

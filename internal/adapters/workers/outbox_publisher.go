@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"go.uber.org/zap"
 )
@@ -15,6 +16,7 @@ type OutboxPublisher struct {
 	maxAttempts  int
 	pollInterval time.Duration
 	log          *zap.Logger
+	metrics      *metrics.Metrics
 }
 
 func NewOutboxPublisher(
@@ -27,6 +29,7 @@ func NewOutboxPublisher(
 		payload []byte,
 	) error,
 	log *zap.Logger,
+	m *metrics.Metrics,
 ) *OutboxPublisher {
 	return &OutboxPublisher{
 		repo:         repo,
@@ -34,6 +37,7 @@ func NewOutboxPublisher(
 		maxAttempts:  5,
 		pollInterval: 2 * time.Second,
 		log:          log,
+		metrics:      m,
 	}
 }
 
@@ -65,6 +69,10 @@ func (w *OutboxPublisher) Start(ctx context.Context) error {
 			continue
 		}
 
+		if w.metrics != nil {
+			w.metrics.OutboxPendingCount.Set(float64(len(events)))
+		}
+
 		for _, event := range events {
 			if err := ctx.Err(); err != nil {
 				return nil
@@ -93,7 +101,9 @@ func (w *OutboxPublisher) publish(
 			zap.String("event_id", event.ID),
 			zap.Int("attempts", event.Attempts),
 		)
-
+		if w.metrics != nil {
+			w.metrics.DLQTotal.Inc()
+		}
 		return
 	}
 
@@ -101,6 +111,7 @@ func (w *OutboxPublisher) publish(
 		return
 	}
 
+	publishStart := time.Now()
 	err := w.publishFunc(
 		ctx,
 		event.EventType,
@@ -108,6 +119,9 @@ func (w *OutboxPublisher) publish(
 		event.AggregateID,
 		event.Payload,
 	)
+	if w.metrics != nil {
+		w.metrics.OutboxPublishLatency.Observe(time.Since(publishStart).Seconds())
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) ||
 			errors.Is(err, context.DeadlineExceeded) {

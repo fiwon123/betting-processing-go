@@ -14,7 +14,7 @@ type Repository interface {
 	SetInternalReference(ctx context.Context, id string, internalRef string) error
 	FindPending(ctx context.Context, limit int) ([]*Transaction, error)
 	FindPendingReferences(ctx context.Context, limit int) ([]*Transaction, error)
-	HasSuccessfulReversal(ctx context.Context, referenceID string, reversalType TransactionType) (bool, error)
+	HasSuccessfulReversal(ctx context.Context, referenceID string) (bool, error)
 	IncrementRefAttempts(ctx context.Context, id string) error
 }
 

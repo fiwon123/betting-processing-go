@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/domain"
+	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/money"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,17 +19,20 @@ type Service struct {
 	repo       Repository
 	ledgerRepo LedgerRepository
 	pool       *pgxpool.Pool
+	metrics    *metrics.Metrics
 }
 
 func NewService(
 	repo Repository,
 	ledgerRepo LedgerRepository,
 	pool *pgxpool.Pool,
+	m *metrics.Metrics,
 ) *Service {
 	return &Service{
 		repo:       repo,
 		ledgerRepo: ledgerRepo,
 		pool:       pool,
+		metrics:    m,
 	}
 }
 
@@ -86,13 +90,7 @@ func (s *Service) CreateWallet(
 		ctx,
 		`
 		INSERT INTO wallets (
-			player_id,
-			provider_id,
-			currency,
-			balance,
-			version,
-			created_at,
-			updated_at
+			player_id, provider_id, currency, balance, version, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, 1, now(), now())
 		RETURNING id
@@ -133,28 +131,12 @@ func (s *Service) CreateWallet(
 			ctx,
 			`
 			INSERT INTO wager_transactions (
-				origin,
-				wallet_id,
-				player_id,
-				transaction_type,
-				amount,
-				currency,
-				status,
-				created_at,
-				updated_at,
-				processed_at
+				origin, wallet_id, player_id, transaction_type, amount, currency,
+				status, created_at, updated_at, processed_at
 			)
 			VALUES (
-				'INTERNAL',
-				$1,
-				$2,
-				'OPENING',
-				$3,
-				$4,
-				'PROCESSED',
-				now(),
-				now(),
-				now()
+				'INTERNAL', $1, $2, 'OPENING', $3, $4,
+				'PROCESSED', now(), now(), now()
 			)
 			RETURNING id
 			`,
@@ -374,6 +356,8 @@ func (s *Service) applyBalanceChange(
 		currencyStr string
 		balance     int64
 		version     int64
+		createdAt   time.Time
+		updatedAt   time.Time
 	)
 
 	err = tx.QueryRow(
@@ -385,7 +369,9 @@ func (s *Service) applyBalanceChange(
 			provider_id,
 			currency,
 			balance,
-			version
+			version,
+			created_at,
+			updated_at
 		FROM wallets
 		WHERE id = $1
 		FOR UPDATE
@@ -398,6 +384,8 @@ func (s *Service) applyBalanceChange(
 		&currencyStr,
 		&balance,
 		&version,
+		&createdAt,
+		&updatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -424,8 +412,8 @@ func (s *Service) applyBalanceChange(
 		currency,
 		currentBalance,
 		version,
-		time.Time{},
-		time.Time{},
+		createdAt,
+		updatedAt,
 	)
 	if err != nil {
 		return money.Money{}, money.Money{}, 0,
@@ -534,6 +522,10 @@ func (s *Service) Reconcile(
 	difference, err := stored.Subtract(calculated)
 	if err != nil {
 		return nil, fmt.Errorf("calculate balance difference: %w", err)
+	}
+
+	if !difference.IsZero() && s.metrics != nil {
+		s.metrics.ReconciliationDiv.Inc()
 	}
 
 	return &ReconciliationResult{

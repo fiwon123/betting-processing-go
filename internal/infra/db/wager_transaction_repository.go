@@ -152,14 +152,14 @@ func (r *WagerTransactionRepository) FindPendingReferences(ctx context.Context, 
 	return r.scanTransactions(rows)
 }
 
-func (r *WagerTransactionRepository) HasSuccessfulReversal(ctx context.Context, referenceID string, reversalType wagertransaction.TransactionType) (bool, error) {
+func (r *WagerTransactionRepository) HasSuccessfulReversal(ctx context.Context, referenceID string) (bool, error) {
 	var count int
 	err := r.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM wager_transactions
 		 WHERE internal_reference = $1
-		   AND transaction_type = $2
+		   AND transaction_type IN ('REFUND', 'ROLLBACK')
 		   AND status = 'PROCESSED'`,
-		referenceID, string(reversalType),
+		referenceID,
 	).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check successful reversal: %w", err)

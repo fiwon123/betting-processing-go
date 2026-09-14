@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
@@ -83,24 +84,18 @@ func (s *Service) FindByProviderAndExternalID(ctx context.Context, providerID, e
 }
 
 func (s *Service) ProcessTransaction(ctx context.Context, req Request, idempotencyKey string, messageID string) (*ProcessResult, error) {
+	start := time.Now()
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.ProcessingDuration.Observe(time.Since(start).Seconds())
+		}
+	}()
+
 	if idempotencyKey == "" {
 		idempotencyKey = req.IdempotencyKey
 	}
 	if idempotencyKey == "" {
 		idempotencyKey = req.ProviderID + ":" + req.ExternalTransactionID
-	}
-
-	if messageID != "" {
-		alreadyReceived, err := s.inboxRepo.RecordReceived(ctx, consumerName, messageID, "")
-		if err != nil {
-			return nil, fmt.Errorf("record inbox: %w", err)
-		}
-		if !alreadyReceived {
-			existing, err := s.repo.FindByIdempotencyKey(ctx, req.ProviderID, idempotencyKey)
-			if err == nil && existing != nil {
-				return s.handleReplay(ctx, existing)
-			}
-		}
 	}
 
 	existing, err := s.repo.FindByIdempotencyKey(ctx, req.ProviderID, idempotencyKey)
@@ -413,7 +408,7 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 		return s.reject(ctx, tx, "REFERENCE_NOT_SUCCESSFUL")
 	}
 
-	hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID(), REFUND)
+	hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID())
 	if hasReversal {
 		return s.reject(ctx, tx, "DOUBLE_REVERSAL")
 	}
@@ -528,7 +523,7 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 		return s.reject(ctx, tx, "REFERENCE_NOT_SUCCESSFUL")
 	}
 
-	hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID(), ROLLBACK)
+	hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID())
 	if hasReversal {
 		return s.reject(ctx, tx, "DOUBLE_REVERSAL")
 	}
@@ -597,6 +592,9 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 
 	if ref.Status() == PENDING || ref.Status() == PENDING_REFERENCE {
 		_ = s.repo.IncrementRefAttempts(ctx, tx.ID())
+		if s.metrics != nil {
+			s.metrics.RetriesTotal.Inc()
+		}
 		return &ProcessResult{
 			TransactionID: tx.ID(),
 			Status:        string(PENDING_REFERENCE),
@@ -608,7 +606,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 	}
 
 	if ref.Status() == PROCESSED {
-		hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID(), tx.TransactionType())
+		hasReversal, _ := s.repo.HasSuccessfulReversal(ctx, ref.ID())
 		if hasReversal {
 			return s.reject(ctx, tx, "DOUBLE_REVERSAL")
 		}
@@ -877,20 +875,16 @@ func (s *Service) commitWithLedger(ctx context.Context, tx *Transaction, dir dom
 		string(tx.Status()), nullString(tx.FailureCode()), balAfter.Amount(), tx.CreatedAt(), tx.UpdatedAt(), tx.ProcessedAt(),
 	).Scan(&txID)
 	if err != nil {
+		if isUniqueViolation(err) {
+			existing, findErr := s.repo.FindByIdempotencyKey(ctx, tx.Provider(), tx.IdempotencyKey())
+			if findErr == nil && existing != nil {
+				_ = dbTx.Rollback(ctx)
+				return ErrIdempotentDuplicate
+			}
+		}
 		return fmt.Errorf("insert transaction: %w", err)
 	}
 	tx.SetID(txID)
-
-	tag, err := dbTx.Exec(ctx,
-		`UPDATE wallets SET balance = $1, version = $2, updated_at = now() WHERE id = $3 AND version = $4`,
-		balAfter.Amount(), walletVersion, tx.WalletID(), walletVersion-1,
-	)
-	if err != nil {
-		return fmt.Errorf("update wallet balance: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return wallet.ErrConcurrentUpdate
-	}
 
 	var entryID string
 	err = dbTx.QueryRow(ctx,
