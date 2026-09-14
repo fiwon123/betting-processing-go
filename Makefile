@@ -44,7 +44,7 @@ is_ready:
 	curl -i http://localhost:8080/health/ready
 
 ## Migrations
-CONN := "postgresql://$(API_DB_USER):$(API_DB_PWD)@localhost:$(API_DB_PORT)/$(API_DB)?sslmode=disable"
+CONN := "postgresql://$(API_DB_USER):$(API_DB_PASSWORD)@localhost:$(API_DB_PORT)/$(API_DB)?sslmode=disable"
 FOLDER := ./migrations
 
 .PHONY: migrate_up migrate_down migrate_create migrate_force
