@@ -35,7 +35,7 @@ type OIDCConfig struct {
 	ClientID  string
 	JWKSURL   string
 	Algorithm string
-	CacheTTL time.Duration
+	CacheTTL  time.Duration
 }
 
 type JWTClaims struct {
@@ -158,13 +158,13 @@ func (kv *KeyValidator) refreshKeys() error {
 
 	var jwks struct {
 		Keys []struct {
-			Kid     string `json:"kid"`
-			N       string `json:"n"`
-			E       string `json:"e"`
-			Kty     string `json:"kty"`
-			Alg     string `json:"alg"`
-			Use     string `json:"use"`
-			KeyOps  []string `json:"key_ops"`
+			Kid    string   `json:"kid"`
+			N      string   `json:"n"`
+			E      string   `json:"e"`
+			Kty    string   `json:"kty"`
+			Alg    string   `json:"alg"`
+			Use    string   `json:"use"`
+			KeyOps []string `json:"key_ops"`
 		} `json:"keys"`
 	}
 
