@@ -3,11 +3,13 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"sync"
 	"testing"
+	"time"
 )
 
 func skipIfNoEnv(t *testing.T) {
@@ -888,7 +890,7 @@ func TestE2E_HTTPAndSQS_SameWalletConsistency(t *testing.T) {
 		"walletId":              walletID,
 		"roundId":               "round-cross",
 		"kind":                  "BET",
-		"money":                  map[string]string{"amount": "20.00", "currency": "BRL"},
+		"money":                 map[string]string{"amount": "20.00", "currency": "BRL"},
 	})
 	_, err = env.SendSQSMessage(t.Context(), string(sqsBetBody))
 	if err != nil {
