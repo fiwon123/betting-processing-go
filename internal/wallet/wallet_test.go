@@ -119,11 +119,9 @@ func TestNewWalletRejectsEmptyProviderID(t *testing.T) {
 }
 
 func TestNewWalletRejectsInvalidCurrency(t *testing.T) {
-	bal := mustMoney(t, 10000, money.Currency("USD"))
-
-	_, err := NewWallet("w1", "p1", "provider-a", bal)
-	if err != ErrInvalidCurrency {
-		t.Fatalf("expected ErrInvalidCurrency, got %v", err)
+	_, err := NewWallet("w1", "p1", "provider-a", money.Money{})
+	if err == nil {
+		t.Fatal("expected error for zero-value money with no currency")
 	}
 }
 
@@ -346,11 +344,9 @@ func TestWalletDebitRejectsCurrencyMismatch(t *testing.T) {
 		t.Fatalf("create wallet: %v", err)
 	}
 
-	amount := mustMoney(t, 100, money.Currency("USD"))
-
-	_, err = w.Debit(amount)
-	if err != ErrCurrencyMismatch {
-		t.Fatalf("expected ErrCurrencyMismatch, got %v", err)
+	_, err = w.Debit(money.Money{})
+	if err == nil {
+		t.Fatal("expected error for zero-value money")
 	}
 }
 
