@@ -177,8 +177,15 @@ func (s *Service) handleReplay(ctx context.Context, existing *Transaction) (*Pro
 }
 
 func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.Money, messageID string) (*ProcessResult, error) {
-	balBefore, balAfter, walletVersion, err := s.walletSvc.Debit(ctx, nil, tx.WalletID(), amount)
+	dbTx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("begin bet transaction: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	balBefore, balAfter, walletVersion, err := s.walletSvc.Debit(ctx, dbTx, tx.WalletID(), amount)
+	if err != nil {
+		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletError(err)
 		tx.SetFailureCode(failureCode)
 		_ = s.createAndReject(ctx, tx, failureCode)
@@ -194,7 +201,7 @@ func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.
 		return nil, fmt.Errorf("%w: %w", ErrInsufficientBalance, err)
 	}
 
-	err = s.commitWithLedger(ctx, tx, domain.DEBIT, amount, balBefore, balAfter, walletVersion, messageID)
+	err = s.commitWithLedger(ctx, dbTx, tx, domain.DEBIT, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -206,8 +213,15 @@ func (s *Service) processBet(ctx context.Context, tx *Transaction, amount money.
 }
 
 func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.Money, messageID string) (*ProcessResult, error) {
-	balBefore, balAfter, walletVersion, err := s.walletSvc.Credit(ctx, nil, tx.WalletID(), amount)
+	dbTx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("begin win transaction: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	balBefore, balAfter, walletVersion, err := s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
+	if err != nil {
+		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletError(err)
 		tx.SetFailureCode(failureCode)
 		_ = s.createAndReject(ctx, tx, failureCode)
@@ -223,7 +237,7 @@ func (s *Service) processWin(ctx context.Context, tx *Transaction, amount money.
 		return nil, fmt.Errorf("%w: %w", ErrInsufficientBalance, err)
 	}
 
-	err = s.commitWithLedger(ctx, tx, domain.CREDIT, amount, balBefore, balAfter, walletVersion, messageID)
+	err = s.commitWithLedger(ctx, dbTx, tx, domain.CREDIT, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +431,15 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 		return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 	}
 
-	balBefore, balAfter, walletVersion, err := s.walletSvc.Credit(ctx, nil, tx.WalletID(), amount)
+	dbTx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("begin refund transaction: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	balBefore, balAfter, walletVersion, err := s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
+	if err != nil {
+		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletErrorForReversal(err)
 		tx.SetFailureCode(failureCode)
 		_ = s.createAndReject(ctx, tx, failureCode)
@@ -426,7 +447,7 @@ func (s *Service) processRefund(ctx context.Context, tx *Transaction, req Reques
 	}
 
 	tx.SetInternalReference(ref.ID())
-	err = s.commitWithLedger(ctx, tx, domain.CREDIT, amount, balBefore, balAfter, walletVersion, messageID)
+	err = s.commitWithLedger(ctx, dbTx, tx, domain.CREDIT, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -532,25 +553,32 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 		return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 	}
 
+	dbTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin rollback transaction: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
 	var dir domain.Direction
 	var balBefore, balAfter money.Money
 	var walletVersion int64
 
 	switch ref.TransactionType() {
 	case BET:
-		balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, nil, tx.WalletID(), amount)
+		balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
 		dir = domain.CREDIT
 	case WIN:
-		balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, nil, tx.WalletID(), amount)
+		balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, dbTx, tx.WalletID(), amount)
 		dir = domain.DEBIT
 	case REFUND:
-		balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, nil, tx.WalletID(), amount)
+		balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, dbTx, tx.WalletID(), amount)
 		dir = domain.DEBIT
 	default:
 		return s.reject(ctx, tx, "INVALID_REFERENCE_TYPE")
 	}
 
 	if err != nil {
+		_ = dbTx.Rollback(ctx)
 		failureCode := mapWalletErrorForReversal(err)
 		tx.SetFailureCode(failureCode)
 		_ = s.createAndReject(ctx, tx, failureCode)
@@ -558,7 +586,7 @@ func (s *Service) processRollback(ctx context.Context, tx *Transaction, req Requ
 	}
 
 	tx.SetInternalReference(ref.ID())
-	err = s.commitWithLedger(ctx, tx, dir, amount, balBefore, balAfter, walletVersion, messageID)
+	err = s.commitWithLedger(ctx, dbTx, tx, dir, amount, balBefore, balAfter, walletVersion, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -616,21 +644,27 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 			return s.reject(ctx, tx, "REVERSAL_VALUE_MISMATCH")
 		}
 
+		dbTx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("begin resolve-ref transaction: %w", err)
+		}
+		defer dbTx.Rollback(ctx)
+
 		var dir domain.Direction
 		var balBefore, balAfter money.Money
 		var walletVersion int64
 
 		switch tx.TransactionType() {
 		case REFUND:
-			balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, nil, tx.WalletID(), amount)
+			balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
 			dir = domain.CREDIT
 		case ROLLBACK:
 			switch ref.TransactionType() {
 			case BET:
-				balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, nil, tx.WalletID(), amount)
+				balBefore, balAfter, walletVersion, err = s.walletSvc.Credit(ctx, dbTx, tx.WalletID(), amount)
 				dir = domain.CREDIT
 			case WIN, REFUND:
-				balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, nil, tx.WalletID(), amount)
+				balBefore, balAfter, walletVersion, err = s.walletSvc.Debit(ctx, dbTx, tx.WalletID(), amount)
 				dir = domain.DEBIT
 			default:
 				return s.reject(ctx, tx, "INVALID_REFERENCE_TYPE")
@@ -640,16 +674,17 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 		}
 
 		if err != nil {
+			_ = dbTx.Rollback(ctx)
 			failureCode := mapWalletErrorForReversal(err)
 			tx.SetFailureCode(failureCode)
 
-			dbTx, err := s.pool.Begin(ctx)
+			rejectTx, err := s.pool.Begin(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("begin reject update: %w", err)
 			}
-			defer dbTx.Rollback(ctx)
+			defer rejectTx.Rollback(ctx)
 
-			_, err = dbTx.Exec(ctx,
+			_, err = rejectTx.Exec(ctx,
 				`UPDATE wager_transactions SET status = $1, failure_code = $2, updated_at = now(), processed_at = now() WHERE id = $3`,
 				string(REJECTED), nullString(failureCode), tx.ID(),
 			)
@@ -677,7 +712,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 				},
 			}
 			payload, _ := json.Marshal(rejectedEvent)
-			_, err = dbTx.Exec(ctx,
+			_, err = rejectTx.Exec(ctx,
 				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at)
 				 VALUES ($1, $2, $3, $4, $5, 0, $5)`,
 				rejectedEvent.AggregateType, rejectedEvent.AggregateID, rejectedEvent.EventType, payload, rejectedEvent.OccurredAt,
@@ -686,7 +721,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 				return nil, fmt.Errorf("insert rejected outbox event: %w", err)
 			}
 
-			if err := dbTx.Commit(ctx); err != nil {
+			if err := rejectTx.Commit(ctx); err != nil {
 				return nil, fmt.Errorf("commit reject: %w", err)
 			}
 
@@ -694,7 +729,7 @@ func (s *Service) ResolvePendingReference(ctx context.Context, txID string) (*Pr
 		}
 
 		tx.SetInternalReference(ref.ID())
-		err = s.commitWithLedger(ctx, tx, dir, amount, balBefore, balAfter, walletVersion, "")
+		err = s.commitWithLedger(ctx, dbTx, tx, dir, amount, balBefore, balAfter, walletVersion, "")
 		if err != nil {
 			return nil, err
 		}
@@ -842,12 +877,7 @@ func (s *Service) reject(ctx context.Context, tx *Transaction, failureCode strin
 	}, nil
 }
 
-func (s *Service) commitWithLedger(ctx context.Context, tx *Transaction, dir domain.Direction, amount money.Money, balBefore, balAfter money.Money, walletVersion int64, messageID string) error {
-	dbTx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer dbTx.Rollback(ctx)
+func (s *Service) commitWithLedger(ctx context.Context, dbTx pgx.Tx, tx *Transaction, dir domain.Direction, amount money.Money, balBefore, balAfter money.Money, walletVersion int64, messageID string) error {
 
 	if messageID != "" {
 		if _, err := s.inboxRepo.RecordReceivedTx(ctx, dbTx, consumerName, messageID, ""); err != nil {
@@ -858,7 +888,7 @@ func (s *Service) commitWithLedger(ctx context.Context, tx *Transaction, dir dom
 	tx.TransitionTo(PROCESSED)
 
 	var txID string
-	err = dbTx.QueryRow(ctx,
+	err := dbTx.QueryRow(ctx,
 		`INSERT INTO wager_transactions
 		 (origin, external_id, provider, idempotency_key, payload_hash,
 		  wallet_id, player_id, round_id, game_id,
