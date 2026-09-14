@@ -7,6 +7,7 @@ import (
 	"time"
 
 	workers "github.com/fiwon123/betting-processing-go/internal/adapters/workers"
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
 	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/infra/logger"
@@ -14,7 +15,6 @@ import (
 	"github.com/fiwon123/betting-processing-go/internal/infra/sqs"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/fiwon123/betting-processing-go/internal/wallet"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
@@ -35,7 +35,7 @@ func main() {
 			sqs.New,
 			db.NewPool,
 			db.NewTxManager,
-			func(tm *db.TxManager) *pgxpool.Pool { return tm.Pool() },
+			func(tm *db.TxManager) domain.DBTxFactory { return tm },
 			db.NewWagerTransactionRepository,
 			db.NewInboxRepository,
 			db.NewOutboxRepository,

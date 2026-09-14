@@ -66,14 +66,17 @@ services:
     depends_on:
       keycloak:
         condition: service_started
+      postgres:
+        condition: service_healthy
     restart: "no"
     environment:
       KC_URL: http://keycloak:8080
       KC_ADMIN_USERNAME: ${KC_ADMIN_USERNAME}
       KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KC_DB_URL: postgresql://${KC_DB_USER}:${KC_DB_PASSWORD}@postgres:5432/${KC_DB}
     volumes:
       - ./scripts/keycloak/setup-test-realm.sh:/scripts/setup-test-realm.sh:ro
-    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null 2>&1 && /bin/sh /scripts/setup-test-realm.sh"]
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq postgresql-client >/dev/null 2>&1 && /bin/sh /scripts/setup-test-realm.sh"]
 
   sqs-init:
     build:

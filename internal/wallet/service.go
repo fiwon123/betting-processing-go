@@ -275,6 +275,8 @@ func (s *Service) applyBalanceChange(
 			fmt.Errorf("load wallet for balance change: %w", err)
 	}
 
+	originalVersion := w.Version()
+
 	var change *BalanceChange
 
 	switch direction {
@@ -287,7 +289,7 @@ func (s *Service) applyBalanceChange(
 		return money.Money{}, money.Money{}, 0, err
 	}
 
-	newVersion, err := s.repo.UpdateBalanceTx(ctx, tx, w.ID(), change.BalanceAfter, w.Version())
+	newVersion, err := s.repo.UpdateBalanceTx(ctx, tx, w.ID(), change.BalanceAfter, originalVersion)
 	if err != nil {
 		return money.Money{}, money.Money{}, 0,
 			fmt.Errorf("update wallet balance: %w", err)

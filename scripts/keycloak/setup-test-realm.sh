@@ -100,19 +100,53 @@ curl -sf -X POST "${KC_URL}/admin/realms/${REALM}/users" \
     }
   }" || echo "User provider2 may already exist"
 
-# Disable VERIFY_PROFILE required action for both users
-echo "Disabling VERIFY_PROFILE for users..."
-for USER in provider1 provider2; do
-  USER_ID=$(curl -sf -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    "${KC_URL}/admin/realms/${REALM}/users?username=${USER}" | \
-    jq -r '.[0].id // empty')
-  
-  if [ -n "$USER_ID" ]; then
-    curl -sf -X PUT "${KC_URL}/admin/realms/${REALM}/users/${USER_ID}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -d "{\"requiredActions\": []}" > /dev/null 2>&1 || true
-  fi
-done
+# Disable VERIFY_PROFILE required action at realm level
+# In Keycloak 26.x this is enabled by default and blocks "Account is not fully set up"
+echo "Disabling VERIFY_PROFILE required action..."
+curl -sf -X PUT "${KC_URL}/admin/realms/${REALM}/authentication/required-actions/VERIFY_PROFILE" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":false}' > /dev/null 2>&1 || echo "Warning: could not disable VERIFY_PROFILE"
+
+# Create JWT mapper for provider_id attribute on betting-api client
+# This ensures provider_id appears in the access token
+echo "Creating provider_id JWT mapper..."
+CLIENT_UUID=$(curl -sf -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  "${KC_URL}/admin/realms/${REALM}/clients?clientId=${CLIENT_ID}" | jq -r '.[0].id')
+
+if [ -n "$CLIENT_UUID" ]; then
+  curl -sf -X POST "${KC_URL}/admin/realms/${REALM}/clients/${CLIENT_UUID}/protocol-mappers/models" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "name": "provider_id",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-usermodel-attribute-mapper",
+      "config": {
+        "user.attribute": "provider_id",
+        "claim.name": "provider_id",
+        "id.token.claim": "true",
+        "access.token.claim": "true",
+        "userinfo.token.claim": "true",
+        "jsonType.label": "String",
+        "multivalued": "false"
+      }
+    }' > /dev/null 2>&1 || echo "Warning: could not create provider_id mapper (may already exist)"
+fi
+
+# Workaround: Keycloak 26.x REST API does not persist user attributes via PUT.
+# Set provider_id attribute directly in the database for both users.
+echo "Setting provider_id attributes in database..."
+psql "${KC_DB_URL:-postgresql://keycloak:keycloak@postgres:5432/keycloak}" -c "
+  INSERT INTO user_attribute (user_id, name, value)
+  SELECT id, 'provider_id', 'provider1' FROM user_entity WHERE username = 'provider1'
+  ON CONFLICT DO NOTHING;
+" > /dev/null 2>&1 || echo "Warning: could not set provider1 attribute via DB (psql may not be available)"
+
+psql "${KC_DB_URL:-postgresql://keycloak:keycloak@postgres:5432/keycloak}" -c "
+  INSERT INTO user_attribute (user_id, name, value)
+  SELECT id, 'provider_id', 'provider2' FROM user_entity WHERE username = 'provider2'
+  ON CONFLICT DO NOTHING;
+" > /dev/null 2>&1 || echo "Warning: could not set provider2 attribute via DB (psql may not be available)"
 
 echo "Keycloak provisioning complete."

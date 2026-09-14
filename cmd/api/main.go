@@ -29,6 +29,7 @@ import (
 	_ "github.com/fiwon123/betting-processing-go/docs"
 	"github.com/fiwon123/betting-processing-go/internal/adapters/handlers"
 	"github.com/fiwon123/betting-processing-go/internal/adapters/middleware"
+	"github.com/fiwon123/betting-processing-go/internal/domain"
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
 	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/infra/logger"
@@ -37,7 +38,6 @@ import (
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/fiwon123/betting-processing-go/internal/wallet"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/swaggo/swag"
@@ -178,7 +178,7 @@ func main() {
 			func(c cfg.Config) cfg.DatabaseConfig { return c.Database },
 			db.NewPool,
 			db.NewTxManager,
-			func(tm *db.TxManager) *pgxpool.Pool { return tm.Pool() },
+			func(tm *db.TxManager) domain.DBTxFactory { return tm },
 			db.NewWalletRepository,
 			db.NewLedgerRepository,
 			db.NewWagerTransactionRepository,
