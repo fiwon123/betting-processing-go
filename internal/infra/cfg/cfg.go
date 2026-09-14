@@ -30,7 +30,8 @@ type AWSConfig struct {
 }
 
 type SQSConfig struct {
-	QueueURL string
+	QueueURL         string
+	OutboundQueueURL string
 }
 
 type OIDCConfig struct {
@@ -60,7 +61,8 @@ func NewConfig() (Config, error) {
 			Endpoint: os.Getenv("AWS_ENDPOINT_URL"),
 		},
 		SQS: SQSConfig{
-			QueueURL: os.Getenv("SQS_QUEUE_URL"),
+			QueueURL:         os.Getenv("SQS_QUEUE_URL"),
+			OutboundQueueURL: os.Getenv("SQS_OUTBOUND_QUEUE_URL"),
 		},
 		OIDC: OIDCConfig{
 			Enabled:   GetEnv("API_OIDC_ENABLED", "false") == "true",

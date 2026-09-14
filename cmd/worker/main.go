@@ -10,6 +10,7 @@ import (
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
 	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/infra/logger"
+	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/infra/sqs"
 	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
 	"github.com/fiwon123/betting-processing-go/internal/wallet"
@@ -39,10 +40,12 @@ func main() {
 			db.NewLedgerRepository,
 			wallet.NewService,
 			wagertransaction.NewService,
+			metrics.New,
 		),
 
 		fx.Invoke(func(
 			lc fx.Lifecycle,
+			appCfg cfg.Config,
 			client *sqs.Client,
 			wagerSvc *wagertransaction.Service,
 			outboxRepo *db.OutboxRepository,
@@ -63,9 +66,14 @@ func main() {
 				log,
 			)
 
+			outboundURL := appCfg.SQS.OutboundQueueURL
+			if outboundURL == "" {
+				outboundURL = client.QueueURL()
+			}
+
 			outboxPublisher := workers.NewOutboxPublisher(
 				outboxRepo,
-				workers.SQSPublishFunc(client, client.QueueURL()),
+				workers.SQSPublishFunc(client, outboundURL),
 				log,
 			)
 
@@ -98,6 +106,9 @@ func main() {
 				OnStop: func(stopCtx context.Context) error {
 					cancel()
 
+					shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 25*time.Second)
+					defer shutdownCancel()
+
 					done := make(chan struct{})
 
 					go func() {
@@ -105,14 +116,11 @@ func main() {
 						close(done)
 					}()
 
-					shutdownTimeout := 30 * time.Second
-					timer := time.NewTimer(shutdownTimeout)
-					defer timer.Stop()
-
 					select {
 					case <-done:
+						log.Info("all workers stopped gracefully")
 						return nil
-					case <-timer.C:
+					case <-shutdownCtx.Done():
 						log.Warn("worker shutdown timed out, forcing exit")
 						return nil
 					case <-stopCtx.Done():
