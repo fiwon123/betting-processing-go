@@ -5,13 +5,20 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/fiwon123/betting-processing-go/internal/adapters/handlers"
+	"github.com/fiwon123/betting-processing-go/internal/adapters/middleware"
 	"github.com/fiwon123/betting-processing-go/internal/infra/cfg"
 	"github.com/fiwon123/betting-processing-go/internal/infra/db"
 	"github.com/fiwon123/betting-processing-go/internal/infra/logger"
+	"github.com/fiwon123/betting-processing-go/internal/infra/metrics"
 	"github.com/fiwon123/betting-processing-go/internal/infra/sqs"
+	"github.com/fiwon123/betting-processing-go/internal/wagertransaction"
+	"github.com/fiwon123/betting-processing-go/internal/wallet"
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
@@ -23,22 +30,53 @@ type Route interface {
 
 func NewRouter(routes []Route) chi.Router {
 	r := chi.NewRouter()
-
 	for _, route := range routes {
 		route.RegisterRoutes(r)
 	}
-
 	return r
 }
 
-func NewHTTPServer(
-	lc fx.Lifecycle,
-	router chi.Router,
-	log *zap.Logger,
-) *http.Server {
+type authHandler struct {
+	inner http.Handler
+	auth  func(http.Handler) http.Handler
+	log   *zap.Logger
+}
+
+func (h *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/wagering") || strings.HasPrefix(path, "/providers/") || strings.HasPrefix(path, "/wallets") {
+		h.auth(h.inner).ServeHTTP(w, r)
+		return
+	}
+	h.inner.ServeHTTP(w, r)
+}
+
+func NewHTTPServer(lc fx.Lifecycle, router chi.Router, log *zap.Logger, cfg cfg.Config) *http.Server {
+	router.Handle("/metrics", promhttp.Handler())
+
+	var handler http.Handler = router
+
+	if cfg.OIDC.Enabled {
+		oidcCfg := middleware.OIDCConfig{
+			IssuerURL: cfg.OIDC.IssuerURL,
+			ClientID:  cfg.OIDC.ClientID,
+			JWKSURL:   cfg.OIDC.JWKSURL,
+			CacheTTL:  5 * time.Minute,
+		}
+		authMiddleware := middleware.OIDCAuth(oidcCfg)
+		handler = &authHandler{
+			inner: router,
+			auth:  authMiddleware,
+			log:   log,
+		}
+		log.Info("OIDC auth middleware enabled for /wagering, /providers/* and /wallets/*")
+	} else {
+		log.Info("OIDC auth middleware disabled")
+	}
+
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: router,
+		Handler: handler,
 	}
 
 	lc.Append(fx.Hook{
@@ -47,16 +85,12 @@ func NewHTTPServer(
 			if err != nil {
 				return err
 			}
-
 			log.Info("Starting HTTP server", zap.String("addr", srv.Addr))
-
 			go func() {
-				if err := srv.Serve(ln); err != nil &&
-					!errors.Is(err, http.ErrServerClosed) {
+				if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					log.Error("HTTP server stopped", zap.Error(err))
 				}
 			}()
-
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
@@ -83,6 +117,14 @@ func NewDatabaseConfig(c cfg.Config) cfg.DatabaseConfig {
 	return c.Database
 }
 
+func NewWalletServiceAdapter(svc *wallet.Service) handlers.WalletService {
+	return svc
+}
+
+func NewWagerTransactionServiceAdapter(svc *wagertransaction.Service) handlers.WagerTransactionService {
+	return svc
+}
+
 func main() {
 	fx.New(
 		fx.WithLogger(func(log *zap.Logger) fxevent.Logger {
@@ -102,6 +144,21 @@ func main() {
 				NewQueueURL,
 				fx.ResultTags(`name:"sqs-queue-url"`),
 			),
+
+			func(c cfg.Config) cfg.DatabaseConfig { return c.Database },
+			db.NewPool,
+			db.NewWalletRepository,
+			db.NewLedgerRepository,
+			db.NewWagerTransactionRepository,
+			db.NewInboxRepository,
+			db.NewOutboxRepository,
+
+			wallet.NewService,
+			fx.Annotate(
+				wagertransaction.NewService,
+				fx.As(new(handlers.WagerTransactionService)),
+			),
+
 			fx.Annotate(
 				handlers.NewHealthHandler,
 				fx.As(new(Route)),
@@ -113,11 +170,20 @@ func main() {
 				),
 			),
 
-			AsRoute(handlers.NewWalletHandler),
+			fx.Annotate(
+				handlers.NewWalletHandler,
+				fx.As(new(Route)),
+				fx.ResultTags(`group:"routes"`),
+			),
+			fx.Annotate(
+				handlers.NewWagerTransactionHandler,
+				fx.As(new(Route)),
+				fx.ResultTags(`group:"routes"`),
+			),
+
 			cfg.NewConfig,
-			NewDatabaseConfig,
-			db.NewPool,
 			logger.NewLogger,
+			metrics.New,
 		),
 		fx.Invoke(func(*http.Server) {}),
 	).Run()
