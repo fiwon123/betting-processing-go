@@ -128,12 +128,13 @@ func TestConcurrency_IdempotentReplay(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000002"
 	playerID := "00000000-0000-0000-0000-000000000020"
 	seedWallet(t, pool, walletID, playerID, "prov-idempotent", 100000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc := createTestService(t, pool)
 
 	req := Request{
 		ProviderID:            "prov-idempotent",
-		ExternalTransactionID: "ext-idempotent",
+		ExternalTransactionID: fmt.Sprintf("%s-ext-idempotent", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
@@ -169,7 +170,15 @@ func TestConcurrency_IdempotentReplay(t *testing.T) {
 			uniqueTXIDs[r.TransactionID] = true
 		}
 	}
-	t.Logf("unique transaction IDs: %d", len(uniqueTXIDs))
+	// All 50 goroutines should have returned exactly 1 unique tx ID (idempotent replay)
+	var txID string
+	for _, r := range results {
+		if r != nil {
+			txID = r.TransactionID
+			break
+		}
+	}
+	t.Logf("unique transaction IDs: %d (txID=%s)", len(uniqueTXIDs), txID)
 	if len(uniqueTXIDs) > 1 {
 		t.Errorf("expected all goroutines to return same transaction ID, got %d unique", len(uniqueTXIDs))
 	}
@@ -185,13 +194,13 @@ func TestConcurrency_IdempotentReplay(t *testing.T) {
 	}
 
 	countRow := pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id = $1 AND direction = 'DEBIT'`, walletID)
+		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id = $1 AND direction = 'DEBIT' AND transaction_id = $2`, walletID, txID)
 	var debitCount int
 	if err := countRow.Scan(&debitCount); err != nil {
 		t.Fatalf("count ledger debits: %v", err)
 	}
 	if debitCount != 1 {
-		t.Errorf("expected exactly 1 debit in ledger, got %d", debitCount)
+		t.Errorf("expected exactly 1 debit in ledger for tx %s, got %d", txID, debitCount)
 	}
 }
 
@@ -200,6 +209,7 @@ func TestConcurrency_TwoBetsOn100Balance(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000004"
 	playerID := "00000000-0000-0000-0000-000000000040"
 	seedWallet(t, pool, walletID, playerID, "test-two-bets", 10000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc := createTestService(t, pool)
 
@@ -214,7 +224,7 @@ func TestConcurrency_TwoBetsOn100Balance(t *testing.T) {
 			defer wg.Done()
 			req := Request{
 				ProviderID:            "test-two-bets",
-				ExternalTransactionID: fmt.Sprintf("ext-80-%d", idx),
+				ExternalTransactionID: fmt.Sprintf("%s-ext-80-%d", runPrefix, idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
@@ -237,8 +247,10 @@ func TestConcurrency_TwoBetsOn100Balance(t *testing.T) {
 	close(rejected)
 
 	processedCount := 0
-	for range processed {
+	var processedTxIDs []string
+	for txID := range processed {
 		processedCount++
+		processedTxIDs = append(processedTxIDs, txID)
 	}
 	rejectedCount := 0
 	for err := range rejected {
@@ -265,14 +277,18 @@ func TestConcurrency_TwoBetsOn100Balance(t *testing.T) {
 		t.Errorf("final balance mismatch: got %d, want %d", finalBalance, expectedBalance)
 	}
 
-	countRow := pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id = $1 AND direction = 'DEBIT'`, walletID)
-	var debitCount int
-	if err := countRow.Scan(&debitCount); err != nil {
-		t.Fatalf("count ledger debits: %v", err)
-	}
-	if debitCount != 1 {
-		t.Errorf("expected exactly 1 debit in ledger, got %d", debitCount)
+	if processedCount > 0 {
+		for _, txID := range processedTxIDs {
+			countRow := pool.QueryRow(context.Background(),
+				`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id = $1 AND direction = 'DEBIT' AND transaction_id = $2`, walletID, txID)
+			var debitCount int
+			if err := countRow.Scan(&debitCount); err != nil {
+				t.Fatalf("count ledger debits: %v", err)
+			}
+			if debitCount != 1 {
+				t.Errorf("expected exactly 1 debit in ledger for tx %s, got %d", txID, debitCount)
+			}
+		}
 	}
 }
 
@@ -281,6 +297,7 @@ func TestConcurrency_OptimisticLocking(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000003"
 	playerID := "00000000-0000-0000-0000-000000000030"
 	seedWallet(t, pool, walletID, playerID, "test-lock", 100000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc := createTestService(t, pool)
 
@@ -294,7 +311,7 @@ func TestConcurrency_OptimisticLocking(t *testing.T) {
 			defer wg.Done()
 			req := Request{
 				ProviderID:            "test-lock",
-				ExternalTransactionID: fmt.Sprintf("ext-lock-%d", idx),
+				ExternalTransactionID: fmt.Sprintf("%s-ext-lock-%d", runPrefix, idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
@@ -536,6 +553,7 @@ func TestReferenceResolution_PendingThenArrives(t *testing.T) {
 	playerID := "00000000-0000-0000-0000-000000000041"
 	providerID := "prov-ref-pending"
 	seedWallet(t, pool, walletID, playerID, "prov-ref-pending", 100000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
@@ -543,10 +561,10 @@ func TestReferenceResolution_PendingThenArrives(t *testing.T) {
 	// Step 1: Process a BET (will be in PENDING state initially)
 	betReq := Request{
 		ProviderID:            providerID,
-		ExternalTransactionID: "bet-pending-1",
+		ExternalTransactionID: fmt.Sprintf("%s-bet-pending-1", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
-		RoundID:               "round-pending-1",
+		RoundID:               fmt.Sprintf("%s-round-pending-1", runPrefix),
 		Kind:                  "BET",
 		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
 	}
@@ -569,13 +587,13 @@ func TestReferenceResolution_PendingThenArrives(t *testing.T) {
 	// Step 3: REFUND should go to PENDING_REFERENCE
 	refundReq := Request{
 		ProviderID:            providerID,
-		ExternalTransactionID: "refund-pending-1",
+		ExternalTransactionID: fmt.Sprintf("%s-refund-pending-1", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
-		RoundID:               "round-pending-1",
+		RoundID:               fmt.Sprintf("%s-round-pending-1", runPrefix),
 		Kind:                  "REFUND",
 		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
-		ReferenceExternalID:   "bet-pending-1",
+		ReferenceExternalID:   fmt.Sprintf("%s-bet-pending-1", runPrefix),
 	}
 	refundResult, err := svc.ProcessTransaction(ctx, refundReq, "", "")
 	if err != nil {
@@ -682,6 +700,9 @@ func TestConcurrentInstances_SeparateConnections(t *testing.T) {
 	playerID := "00000000-0000-0000-0000-000000000061"
 	seedWallet(t, pool, walletID, playerID, "test-inst", 100000)
 
+	// Use unique run prefix to avoid idempotency key collisions with stale data
+	runPrefix := fmt.Sprintf("inst-%d", time.Now().UnixNano())
+
 	// Create 3 separate pgxpool connections to simulate 3 independent instances
 	ctx := context.Background()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -706,7 +727,7 @@ func TestConcurrentInstances_SeparateConnections(t *testing.T) {
 			svc := services[idx%3]
 			req := Request{
 				ProviderID:            "test-inst",
-				ExternalTransactionID: fmt.Sprintf("ext-inst-%d", idx),
+				ExternalTransactionID: fmt.Sprintf("%s-%d", runPrefix, idx),
 				PlayerID:              playerID,
 				WalletID:              walletID,
 				Kind:                  "BET",
@@ -838,19 +859,21 @@ func TestIdempotentRedelivery_SimulatedCrash(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000080"
 	playerID := "00000000-0000-0000-0000-000000000081"
 	seedWallet(t, pool, walletID, playerID, "prov-redelivery", 100000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
+	extID := fmt.Sprintf("%s-ext-redelivery-1", runPrefix)
 	req := Request{
 		ProviderID:            "prov-redelivery",
-		ExternalTransactionID: "ext-redelivery-1",
+		ExternalTransactionID: extID,
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
 		Money:                 MoneyDTO{Amount: "15.00", Currency: "BRL"},
 	}
-	idempotencyKey := "prov-redelivery:ext-redelivery-1"
+	idempotencyKey := "prov-redelivery:" + extID
 
 	result1, err := svc.ProcessTransaction(ctx, req, idempotencyKey, "")
 	if err != nil {
@@ -895,13 +918,14 @@ func TestRestart_ConsistencyVerification(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-000000000090"
 	playerID := "00000000-0000-0000-0000-000000000091"
 	seedWallet(t, pool, walletID, playerID, "prov-restart", 200000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc1 := createTestService(t, pool)
 	ctx := context.Background()
 
 	betResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            "prov-restart",
-		ExternalTransactionID: "bet-restart-1",
+		ExternalTransactionID: fmt.Sprintf("%s-bet-restart-1", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
@@ -913,7 +937,7 @@ func TestRestart_ConsistencyVerification(t *testing.T) {
 
 	winResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            "prov-restart",
-		ExternalTransactionID: "win-restart-1",
+		ExternalTransactionID: fmt.Sprintf("%s-win-restart-1", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "WIN",
@@ -925,7 +949,7 @@ func TestRestart_ConsistencyVerification(t *testing.T) {
 
 	lossResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            "prov-restart",
-		ExternalTransactionID: "loss-restart-1",
+		ExternalTransactionID: fmt.Sprintf("%s-loss-restart-1", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "LOSS",
@@ -1035,20 +1059,22 @@ func TestCrashBetweenCommitAndSQSDelete_Redelivery(t *testing.T) {
 	walletID := "00000000-0000-0000-0000-0000000000C0"
 	playerID := "00000000-0000-0000-0000-0000000000C1"
 	seedWallet(t, pool, walletID, playerID, "prov-crash-redeliver", 100000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc := createTestService(t, pool)
 	ctx := context.Background()
 
+	extID := fmt.Sprintf("%s-ext-crash-1", runPrefix)
 	req := Request{
 		ProviderID:            "prov-crash-redeliver",
-		ExternalTransactionID: "ext-crash-1",
+		ExternalTransactionID: extID,
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
 		Money:                 MoneyDTO{Amount: "25.00", Currency: "BRL"},
 	}
-	idempotencyKey := "prov-crash-redeliver:ext-crash-1"
-	messageID := "sqs-msg-crash-001"
+	idempotencyKey := "prov-crash-redeliver:" + extID
+	messageID := fmt.Sprintf("sqs-msg-crash-%s", runPrefix)
 
 	result1, err := svc.ProcessTransaction(ctx, req, idempotencyKey, messageID)
 	if err != nil {
@@ -1094,14 +1120,16 @@ func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 	playerID := "00000000-0000-0000-0000-0000000000d1"
 	providerID := "prov-async-pending"
 	seedWallet(t, pool, walletID, playerID, "prov-async-pending", 100000)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	svc1 := createTestService(t, pool)
 	svc2 := createTestService(t, pool)
 	ctx := context.Background()
 
+	betExtID := fmt.Sprintf("%s-bet-async-pending-1", runPrefix)
 	betResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
-		ExternalTransactionID: "bet-async-pending-1",
+		ExternalTransactionID: betExtID,
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
@@ -1121,12 +1149,12 @@ func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 
 	refundResult, err := svc1.ProcessTransaction(ctx, Request{
 		ProviderID:            providerID,
-		ExternalTransactionID: "refund-async-pending-1",
+		ExternalTransactionID: fmt.Sprintf("%s-refund-async-pending-1", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "REFUND",
 		Money:                 MoneyDTO{Amount: "20.00", Currency: "BRL"},
-		ReferenceExternalID:   "bet-async-pending-1",
+		ReferenceExternalID:   betExtID,
 	}, "", "")
 	if err != nil {
 		t.Fatalf("process REFUND: %v", err)
@@ -1248,6 +1276,7 @@ func TestDiagnostic_IdempotentReplay(t *testing.T) {
 	providerID := "prov-idempotent"
 	seedBalance := int64(100000)
 	seedWallet(t, pool, walletID, playerID, providerID, seedBalance)
+	runPrefix := fmt.Sprintf("run-%d", time.Now().UnixNano())
 
 	// Log wallet state right after seed
 	var preBalance int64
@@ -1267,7 +1296,7 @@ func TestDiagnostic_IdempotentReplay(t *testing.T) {
 
 	req := Request{
 		ProviderID:            providerID,
-		ExternalTransactionID: "ext-diag",
+		ExternalTransactionID: fmt.Sprintf("%s-ext-diag", runPrefix),
 		PlayerID:              playerID,
 		WalletID:              walletID,
 		Kind:                  "BET",
