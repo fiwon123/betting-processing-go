@@ -99,6 +99,17 @@ func (r *WagerTransactionRepository) SetInternalReference(ctx context.Context, i
 	return nil
 }
 
+func (r *WagerTransactionRepository) SetInternalReferenceTx(ctx context.Context, dbTx domain.DBTx, id string, internalRef string) error {
+	_, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions SET internal_reference = $1, updated_at = now() WHERE id = $2`,
+		internalRef, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set internal reference: %w", err)
+	}
+	return nil
+}
+
 func (r *WagerTransactionRepository) FindPending(ctx context.Context, limit int) ([]*wagertransaction.Transaction, error) {
 	if limit <= 0 {
 		limit = 10
@@ -182,6 +193,20 @@ func (r *WagerTransactionRepository) IncrementRefAttempts(ctx context.Context, i
 	return nil
 }
 
+func (r *WagerTransactionRepository) IncrementRefAttemptsTx(ctx context.Context, dbTx domain.DBTx, id string) error {
+	_, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions
+		 SET ref_attempts = ref_attempts + 1,
+		     ref_next_attempt_at = now() + ((2 ^ least(ref_attempts + 1, 6)) || ' seconds')::interval,
+		     updated_at = now()
+		 WHERE id = $1`, id,
+	)
+	if err != nil {
+		return fmt.Errorf("increment ref attempts: %w", err)
+	}
+	return nil
+}
+
 func (r *WagerTransactionRepository) ExternalTransactionExists(ctx context.Context, provider, externalID, excludeIdempotencyKey string) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx,
@@ -198,15 +223,15 @@ func (r *WagerTransactionRepository) ExternalTransactionExists(ctx context.Conte
 }
 
 func (r *WagerTransactionRepository) ClaimPendingReferenceTx(ctx context.Context, dbTx domain.DBTx, txID string) (bool, error) {
-	tag, err := dbTx.Exec(ctx,
-		`UPDATE wager_transactions
-		 SET status = 'PROCESSING', updated_at = now()
-		 WHERE id = $1 AND status = 'PENDING_REFERENCE'`, txID,
-	)
+	var status string
+	err := dbTx.QueryRow(ctx,
+		`SELECT status FROM wager_transactions
+		 WHERE id = $1 FOR UPDATE`, txID,
+	).Scan(&status)
 	if err != nil {
-		return false, fmt.Errorf("claim pending reference: %w", err)
+		return false, nil
 	}
-	return tag.RowsAffected() > 0, nil
+	return status == "PENDING_REFERENCE", nil
 }
 
 func (r *WagerTransactionRepository) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *wagertransaction.Transaction) (string, error) {

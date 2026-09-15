@@ -255,6 +255,14 @@ func (r *testRepo) SetInternalReference(ctx context.Context, id string, internal
 	return err
 }
 
+func (r *testRepo) SetInternalReferenceTx(ctx context.Context, dbTx domain.DBTx, id string, internalRef string) error {
+	_, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions SET internal_reference = $1, updated_at = now() WHERE id = $2`,
+		internalRef, id,
+	)
+	return err
+}
+
 func (r *testRepo) FindPending(_ context.Context, _ int) ([]*Transaction, error) {
 	return nil, nil
 }
@@ -321,6 +329,17 @@ func (r *testRepo) IncrementRefAttempts(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *testRepo) IncrementRefAttemptsTx(ctx context.Context, dbTx domain.DBTx, id string) error {
+	_, err := dbTx.Exec(ctx,
+		`UPDATE wager_transactions
+		 SET ref_attempts = ref_attempts + 1,
+		     ref_next_attempt_at = now() + ((2 ^ least(ref_attempts + 1, 6)) || ' seconds')::interval,
+		     updated_at = now()
+		 WHERE id = $1`, id,
+	)
+	return err
+}
+
 func (r *testRepo) ExternalTransactionExists(ctx context.Context, provider, externalID, excludeIdempotencyKey string) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx,
@@ -334,15 +353,15 @@ func (r *testRepo) ExternalTransactionExists(ctx context.Context, provider, exte
 }
 
 func (r *testRepo) ClaimPendingReferenceTx(ctx context.Context, dbTx domain.DBTx, txID string) (bool, error) {
-	tag, err := dbTx.Exec(ctx,
-		`UPDATE wager_transactions
-		 SET status = 'PROCESSING', updated_at = now()
-		 WHERE id = $1 AND status = 'PENDING_REFERENCE'`, txID,
-	)
+	var status string
+	err := dbTx.QueryRow(ctx,
+		`SELECT status FROM wager_transactions
+		 WHERE id = $1 FOR UPDATE`, txID,
+	).Scan(&status)
 	if err != nil {
-		return false, err
+		return false, nil
 	}
-	return tag.RowsAffected() > 0, nil
+	return status == "PENDING_REFERENCE", nil
 }
 
 func (r *testRepo) CreateTransactionTx(ctx context.Context, dbTx domain.DBTx, t *Transaction) (string, error) {

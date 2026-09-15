@@ -29,6 +29,9 @@ func (r *stubRefRepo) UpdateStatus(_ context.Context, _ string, _ wagertransacti
 }
 
 func (r *stubRefRepo) SetInternalReference(_ context.Context, _ string, _ string) error { return nil }
+func (r *stubRefRepo) SetInternalReferenceTx(_ context.Context, _ domain.DBTx, _ string, _ string) error {
+	return nil
+}
 
 func (r *stubRefRepo) FindPending(_ context.Context, _ int) ([]*wagertransaction.Transaction, error) {
 	return nil, nil
@@ -43,6 +46,9 @@ func (r *stubRefRepo) HasSuccessfulReversal(_ context.Context, _ string) (bool, 
 }
 
 func (r *stubRefRepo) IncrementRefAttempts(_ context.Context, _ string) error { return nil }
+func (r *stubRefRepo) IncrementRefAttemptsTx(_ context.Context, _ domain.DBTx, _ string) error {
+	return nil
+}
 
 func (r *stubRefRepo) ExternalTransactionExists(_ context.Context, _, _, _ string) (bool, error) {
 	return false, nil

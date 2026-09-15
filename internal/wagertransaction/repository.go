@@ -12,10 +12,12 @@ type Repository interface {
 	FindByIdempotencyKey(ctx context.Context, provider, idempotencyKey string) (*Transaction, error)
 	UpdateStatus(ctx context.Context, id string, status TransactionStatus, failureCode string) error
 	SetInternalReference(ctx context.Context, id string, internalRef string) error
+	SetInternalReferenceTx(ctx context.Context, tx domain.DBTx, id string, internalRef string) error
 	FindPending(ctx context.Context, limit int) ([]*Transaction, error)
 	FindPendingReferences(ctx context.Context, limit int) ([]*Transaction, error)
 	HasSuccessfulReversal(ctx context.Context, referenceID string) (bool, error)
 	IncrementRefAttempts(ctx context.Context, id string) error
+	IncrementRefAttemptsTx(ctx context.Context, tx domain.DBTx, id string) error
 	ExternalTransactionExists(ctx context.Context, provider, externalID, excludeIdempotencyKey string) (bool, error)
 	ClaimPendingReferenceTx(ctx context.Context, tx domain.DBTx, txID string) (bool, error)
 

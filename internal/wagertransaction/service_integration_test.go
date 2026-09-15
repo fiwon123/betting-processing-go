@@ -1090,8 +1090,8 @@ func TestCrashBetweenCommitAndSQSDelete_Redelivery(t *testing.T) {
 
 func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 	pool := mustPool(t)
-	walletID := "00000000-0000-0000-0000-0000000000D0"
-	playerID := "00000000-0000-0000-0000-0000000000D1"
+	walletID := "00000000-0000-0000-0000-0000000000d0"
+	playerID := "00000000-0000-0000-0000-0000000000d1"
 	providerID := "prov-async-pending"
 	seedWallet(t, pool, walletID, playerID, "prov-async-pending", 100000)
 
@@ -1179,7 +1179,7 @@ func TestAsyncPENDING_TwoInstancesCompeting(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT balance FROM wallets WHERE id = $1`, walletID).Scan(&finalBalance); err != nil {
 		t.Fatalf("read balance: %v", err)
 	}
-	expectedBalance := int64(100000) + 2000
+	expectedBalance := int64(100000) // seed 100000 - BET debit 2000 + REFUND credit 2000 = 100000
 	if finalBalance != expectedBalance {
 		t.Errorf("balance mismatch: got %d, want %d (credit should happen exactly once)", finalBalance, expectedBalance)
 	}
@@ -1332,9 +1332,11 @@ func TestDiagnostic_IdempotentReplay(t *testing.T) {
 	}
 	defer txRows.Close()
 	var txCount int
+	var txID string
 	for txRows.Next() {
 		var id, typ, status, fc string
 		txRows.Scan(&id, &typ, &status, &fc)
+		txID = id
 		txCount++
 		t.Logf("TX[%d]: id=%s type=%s status=%s failure_code=%s", txCount, id, typ, status, fc)
 	}
@@ -1343,23 +1345,23 @@ func TestDiagnostic_IdempotentReplay(t *testing.T) {
 	// Log ledger entries
 	var ledgerCount int
 	err = pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE wallet_id=$1`, walletID,
+		`SELECT COUNT(*) FROM wallet_ledger_entries WHERE transaction_id=$1`, txID,
 	).Scan(&ledgerCount)
 	if err != nil {
 		t.Fatalf("query ledger: %v", err)
 	}
-	t.Logf("TOTAL LEDGER ENTRIES for wallet: %d", ledgerCount)
+	t.Logf("TOTAL LEDGER ENTRIES for tx: %d", ledgerCount)
 
 	// Log outbox events
 	var outboxCount int
 	err = pool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM outbox_events WHERE aggregate_id=$1`,
-		walletID,
+		txID,
 	).Scan(&outboxCount)
 	if err != nil {
 		t.Fatalf("query outbox: %v", err)
 	}
-	t.Logf("TOTAL OUTBOX EVENTS for wallet: %d", outboxCount)
+	t.Logf("TOTAL OUTBOX EVENTS for tx: %d", outboxCount)
 
 	// Final assertion
 	expectedBalance := seedBalance - 500
